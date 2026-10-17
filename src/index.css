@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-abyss text-slate-200 antialiased;
+}
+
+::selection {
+  background: rgba(14, 165, 233, 0.25);
+}
+
+/* Slim blue scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #b9d2ec transparent;
+}
+*::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #b9d2ec;
+  border-radius: 4px;
+}
+
+/* White dropdown options (native selects render OS-styled otherwise) */
+select option {
+  background-color: #ffffff;
+  color: #273a54;
+}
