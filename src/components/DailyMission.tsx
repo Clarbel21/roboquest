@@ -92,6 +92,34 @@ export function DailyMission({ onHome, onFlashcards }: { onHome: () => void; onF
       <div className="mb-5">
         <SectionTitle>Today's mission</SectionTitle>
         <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs text-slate-500">Mode:</span>
+          {(['refresh', 'research', 'homework', 'challenge'] as const).map((m) => (
+            <FocusChip
+              key={m}
+              active={(state.mode ?? 'refresh') === m}
+              onClick={() => actions.setMode(m)}
+              label={m === 'refresh' ? 'Refresh' : m === 'research' ? 'Research' : m === 'homework' ? 'Homework' : 'Challenge'}
+            />
+          ))}
+        </div>
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs text-slate-500">Duration:</span>
+          {([5, 15, 30] as const).map((m) => (
+            <FocusChip
+              key={m}
+              active={(state.profile?.dailyMinutes ?? 15) === m}
+              onClick={() => state.profile && actions.setProfile({ ...state.profile, dailyMinutes: m })}
+              label={`${m} min`}
+            />
+          ))}
+        </div>
+        {((state.mode === 'research' && !(state.labProjects?.length)) ||
+          (state.mode === 'homework' && !(state.assignments?.length))) && (
+          <p className="mb-3 text-xs text-amber-700">
+            This mode needs an item in My Lab — create one there, or switch mode for now.
+          </p>
+        )}
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
           <span className="mr-1 text-xs text-slate-500">Focus:</span>
           <FocusChip
             active={state.focusCategory === 'auto' || !state.focusCategory}

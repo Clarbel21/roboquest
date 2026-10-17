@@ -10,11 +10,13 @@ export function Dashboard({
   onCategory,
   onFlashcards,
   onAssess,
+  onLab,
 }: {
   onDaily: () => void;
   onCategory: (id: string) => void;
   onFlashcards: () => void;
   onAssess: (id: string) => void;
+  onLab: () => void;
 }) {
   const { state } = useProgress();
   const lvl = levelFor(state.xp);
@@ -25,6 +27,26 @@ export function Dashboard({
   const totalLessons = CATEGORIES.reduce((n, c) => n + c.lessons.length, 0);
   const doneLessons = Object.keys(state.completedLessons).length;
   const accuracy = state.totalAnswered ? Math.round((state.totalCorrect / state.totalAnswered) * 100) : null;
+
+  // Personalized, varied greeting — no guilt, no repeated lines.
+  const profile = state.profile;
+  const firstName = profile?.name?.trim();
+  const openMistakes = state.mistakes.filter((m) => !m.resolved).length;
+  const activeProject = state.labProjects?.[0];
+  const goalMessages: Record<string, string> = {
+    fundamentals: 'Fundamentals first — everything else stands on them.',
+    isaac: 'Ready to continue your Isaac Sim journey?',
+    ros2: "Let's get sim and real talking the same language.",
+    coursework: 'Coursework mode: small steps beat all-nighters.',
+    career: 'Every concept here is an interview story in disguise.',
+  };
+  const candidates: string[] = [goalMessages[profile?.goal ?? 'fundamentals']];
+  if (dueCount >= 3) candidates.push(`${dueCount} concepts are ready for review.`);
+  if (openMistakes >= 2) candidates.push("Let's tackle one small engineering challenge today.");
+  if (activeProject) candidates.push(`Let's push "${activeProject.title}" forward today.`);
+  if (doneLessons > 0) candidates.push('Your progress is right where you left it.');
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+  const personalLine = candidates[dayOfYear % candidates.length];
 
   return (
     <div className="mx-auto max-w-5xl animate-slide-up space-y-6">
@@ -43,9 +65,15 @@ export function Dashboard({
         <Byte size={96} mood={headline.done ? 'happy' : 'idle'} />
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-slate-100">
-            {headline.done ? 'Systems stable today.' : 'Welcome back, engineer.'}
+            {firstName
+              ? `Welcome back, ${firstName}! 👋`
+              : headline.done
+                ? 'Systems stable today.'
+                : 'Welcome back, engineer.'}
           </h1>
-          <p className="mt-1 text-sm text-slate-400">{headline.text}</p>
+          <p className="mt-1 text-sm text-slate-400">
+            {headline.done ? headline.text : personalLine}
+          </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Chip className="border border-amber-400/30 bg-amber-400/10 text-amber-700">
               🔥 {state.streak.current} day streak
@@ -85,6 +113,26 @@ export function Dashboard({
           </div>
         </Card>
       )}
+
+      {/* Learning Lab */}
+      <Card>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-widest text-violet-400/90">My Learning Lab</div>
+            <h2 className="mt-1 text-sm font-semibold text-slate-200">
+              {activeProject
+                ? `Research: ${activeProject.title}`
+                : 'Turn your research and coursework into a lesson pathway'}
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Research Lab · Homework Lab — describe the work, get the prerequisites
+            </p>
+          </div>
+          <Btn variant="ghost" onClick={onLab} className="shrink-0">
+            Open My Lab →
+          </Btn>
+        </div>
+      </Card>
 
       {/* Daily mission CTA */}
       <Card className={`border-cyan-400/25 ${session?.done ? '' : 'shadow-glow'}`}>

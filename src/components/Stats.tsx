@@ -3,13 +3,15 @@ import { ALL_CARDS, ALL_LESSONS, CATEGORIES } from '../data';
 import { levelFor, useProgress } from '../engine/progress';
 import { isDue, todayStr } from '../engine/srs';
 import { DIFFICULTY_LABEL } from '../engine/types';
-import type { CategoryId, Difficulty } from '../engine/types';
+import type { CategoryId, Difficulty, SkillAxis } from '../engine/types';
 import { ACCENT, Btn, Card, Chip, Markdown, ProgressBar, SectionTitle } from './ui';
 import { ByteSays } from './Byte';
+import { Onboarding } from './Onboarding';
 
 export function Stats({ onAssess }: { onAssess: (id: string) => void }) {
   const { state, actions } = useProgress();
   const [confirmReset, setConfirmReset] = useState(false);
+  const [editProfile, setEditProfile] = useState(false);
   const lvl = levelFor(state.xp);
   const today = todayStr();
   const dueCount = Object.values(state.srs).filter((c) => isDue(c, today)).length;
@@ -36,6 +38,73 @@ export function Stats({ onAssess }: { onAssess: (id: string) => void }) {
 
   return (
     <div className="mx-auto max-w-3xl animate-slide-up space-y-6">
+      <Card>
+        <SectionTitle
+          right={
+            <button
+              onClick={() => setEditProfile((e) => !e)}
+              className="text-xs text-cyan-700 underline-offset-2 hover:text-cyan-800 hover:underline"
+            >
+              {editProfile ? 'close' : 'edit'}
+            </button>
+          }
+        >
+          Your profile
+        </SectionTitle>
+        {editProfile ? (
+          <Onboarding mode="edit" onDone={() => setEditProfile(false)} />
+        ) : (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+            <Chip className="border border-cyan-400/40 bg-cyan-400/10 text-cyan-800">
+              {state.profile?.name?.trim() || 'anonymous engineer'}
+            </Chip>
+            <Chip className="border border-navy-600 bg-navy-800/70 text-slate-400">
+              goal: {state.profile?.goal ?? 'fundamentals'}
+            </Chip>
+            <Chip className="border border-navy-600 bg-navy-800/70 text-slate-400">
+              {state.profile?.dailyMinutes ?? 15} min/day
+            </Chip>
+            {state.profile?.focusArea && (
+              <Chip className="border border-teal-400/30 bg-teal-400/10 text-teal-700">
+                focus: {state.profile.focusArea}
+              </Chip>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <SectionTitle>Competency map</SectionTitle>
+        <div className="space-y-3">
+          {(['recognition', 'application', 'debugging', 'explanation'] as SkillAxis[]).map((axis) => {
+            const st = state.axisStats?.[axis] ?? { correct: 0, attempts: 0 };
+            const pct = st.attempts ? Math.round((st.correct / st.attempts) * 100) : null;
+            const desc = {
+              recognition: 'recalling concepts (multiple choice)',
+              application: 'applying them (prediction, fill-in, writing code)',
+              debugging: 'finding and diagnosing faults (bug hunts, scenarios)',
+              explanation: 'committing to a root cause and its reasoning (scenario diagnosis)',
+            }[axis];
+            return (
+              <div key={axis}>
+                <div className="mb-1 flex items-center justify-between text-xs">
+                  <span className="font-medium capitalize text-slate-300">{axis}</span>
+                  <span className="text-slate-500">
+                    {pct === null ? 'no data yet' : `${pct}% · ${st.correct}/${st.attempts}`}
+                  </span>
+                </div>
+                <ProgressBar value={pct === null ? 0 : pct / 100} accent={axis === 'debugging' ? 'rose' : axis === 'application' ? 'cyan' : axis === 'explanation' ? 'teal' : 'sky'} />
+                <p className="mt-0.5 text-[10px] text-slate-500">{desc}</p>
+              </div>
+            );
+          })}
+        </div>
+        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+          Measured separately on purpose: strong recognition with weak debugging means concepts are familiar
+          but not yet operational — that gap is exactly what the Application and Troubleshooting tiers train.
+        </p>
+      </Card>
+
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Box value={`${state.xp}`} label="total XP" color="text-cyan-700" />
         <Box value={`Lv ${lvl.level}`} label={lvl.title} color="text-teal-700" />

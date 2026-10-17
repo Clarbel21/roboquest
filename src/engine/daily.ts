@@ -1,21 +1,19 @@
-import { ALL_CARDS, ALL_LESSONS, ALL_QUIZZES, CATEGORIES, QUIZ_BY_ID } from '../data';
-import type { CategoryId, ProgressState } from './types';
+import { ALL_CARDS, ALL_LESSONS, ALL_QUIZZES, CATEGORIES, LESSON_BY_ID, QUIZ_BY_ID } from '../data';
+import type { CategoryId, Lesson, ProgressState } from './types';
 import { DIFFICULTY_ORDER } from './types';
 import { isDue, todayStr } from './srs';
-import type { Lesson } from './types';
 
-// The daily session: 5 review flashcards + 1 lesson + 5 quiz questions.
+// The daily session: review flashcards + one lesson + quiz questions, sized
+// by the learner's preferred duration (5 / 15 / 30 minutes).
 //
-// Adaptive selection:
-//  - Focus subject: if the learner picked one, the daily lesson comes from
-//    that category (others keep working via the category pages).
-//  - Proficiency: lessons below the assessed starting tier are not pushed as
-//    "next up" (they stay available on the category page).
-//  - Weak concepts: review quizzes draw from unresolved mistakes first, then
-//    exercises of COMPLETED lessons — never from material not yet introduced.
+// Learning modes:
+//  - refresh:    the standard path (focus subject aware)
+//  - research:   lesson drawn from the active research project's pathway
+//  - homework:   lesson drawn from the active assignment's pathway
+//  - challenge:  first Application+ lesson whose Foundation prerequisites are
+//                met (completed, or waived by placement); falls back to refresh
 //
-// The composed session persists for the day, so closing the app mid-session
-// resumes exactly where you left off.
+// Reviews never touch material from lessons that have not been completed.
 
 export interface DailySession {
   day: string;
@@ -33,7 +31,7 @@ function tierOf(lesson: Lesson): number {
   return DIFFICULTY_ORDER.indexOf(lesson.difficulty ?? 'foundation');
 }
 
-function inOrder<T>(item: T, pool: T[]): number {
+function inOrder(item: Lesson, pool: Lesson[]): number {
   return pool.indexOf(item);
 }
 
@@ -53,7 +51,54 @@ export function getDailySession(state: ProgressState): DailySession {
   return { day, done: false, ...composed };
 }
 
+/** Session sizing by preferred duration. */
+function countsFor(state: ProgressState): { cards: number; quizzes: number } {
+  const minutes = state.profile?.dailyMinutes ?? 15;
+  if (minutes <= 5) return { cards: 3, quizzes: 3 };
+  if (minutes >= 30) return { cards: 7, quizzes: 7 };
+  return { cards: 5, quizzes: 5 };
+}
+
+/** The lesson pool implied by the active learning mode. */
+function poolForMode(state: ProgressState): Lesson[] {
+  const mode = state.mode ?? 'refresh';
+
+  if (mode === 'research' && state.labProjects?.length) {
+    const lessons = state.labProjects[0].recommendedLessonIds
+      .map((id) => LESSON_BY_ID[id])
+      .filter(Boolean);
+    if (lessons.length) return lessons;
+  }
+  if (mode === 'homework' && state.assignments?.length) {
+    const lessons = state.assignments[0].recommendedLessonIds
+      .map((id) => LESSON_BY_ID[id])
+      .filter(Boolean);
+    if (lessons.length) return lessons;
+  }
+  if (mode === 'challenge') {
+    const focus = state.focusCategory && state.focusCategory !== 'auto' ? state.focusCategory : null;
+    const cats: CategoryId[] = focus ? [focus, ...CATEGORIES.map((c) => c.id).filter((c) => c !== focus)] : CATEGORIES.map((c) => c.id);
+    for (const cid of cats) {
+      const cat = CATEGORIES.find((c) => c.id === cid)!;
+      const assessed = state.assessment?.[cid]?.level;
+      const foundationDone =
+        (assessed && DIFFICULTY_ORDER.indexOf(assessed) >= 1) ||
+        cat.lessons.filter((l) => tierOf(l) === 0).every((l) => state.completedLessons[l.id] !== undefined);
+      if (!foundationDone) continue;
+      const next = cat.lessons
+        .filter((l) => state.completedLessons[l.id] === undefined && tierOf(l) >= 1)
+        .sort((a, b) => tierOf(a) - tierOf(b))[0];
+      if (next) return [next, ...cat.lessons.filter((l) => l.id !== next.id)];
+    }
+    // Nothing is challenge-ready yet — fall back to the standard path.
+  }
+  const focus = state.focusCategory && state.focusCategory !== 'auto' ? state.focusCategory : null;
+  return focus ? CATEGORIES.find((c) => c.id === focus)!.lessons : ALL_LESSONS;
+}
+
 function composeDaily(state: ProgressState, day: string): Omit<DailySession, 'day' | 'done'> {
+  const { cards: cardCount, quizzes: quizCount } = countsFor(state);
+
   // --- Review cards: due first (most overdue), then unseen cards ---
   const dueIds: string[] = [];
   const seen = new Set<string>();
@@ -63,76 +108,77 @@ function composeDaily(state: ProgressState, day: string): Omit<DailySession, 'da
     if (srs) seen.add(card.id);
   }
   const newIds = ALL_CARDS.filter((c) => !seen.has(c.id)).map((c) => c.id);
-  const cardIds = [...dueIds, ...newIds].slice(0, 5);
+  const cardIds = [...dueIds, ...newIds].slice(0, cardCount);
 
-  // --- Lesson: focus subject first, proficiency-aware, tier-ordered ---
-  const focus = state.focusCategory && state.focusCategory !== 'auto' ? state.focusCategory : null;
-  const pool: Lesson[] = focus ? CATEGORIES.find((c) => c.id === focus)!.lessons : ALL_LESSONS;
-
+  // --- Lesson: mode-driven pool, uncompleted first, tier-ordered ---
+  const pool = poolForMode(state);
   const uncompleted = pool.filter((l) => state.completedLessons[l.id] === undefined);
   let lessonId: string;
   if (uncompleted.length > 0) {
-    const assessed = focus ? state.assessment?.[focus]?.level : undefined;
+    const focusCat = state.focusCategory && state.focusCategory !== 'auto' ? state.focusCategory : null;
+    const assessed = focusCat ? state.assessment?.[focusCat]?.level : undefined;
     const minTier = assessed ? DIFFICULTY_ORDER.indexOf(assessed) : 0;
-    // Do not push tiers below the assessed starting point; Engineering
-    // Missions are never skipped by assessment.
-    const eligible = uncompleted.filter(
-      (l) => tierOf(l) >= minTier || (l.difficulty ?? 'foundation') === 'mission',
-    );
+    const eligible = uncompleted.filter((l) => tierOf(l) >= minTier || (l.difficulty ?? 'foundation') === 'mission');
     const candidates = eligible.length > 0 ? eligible : uncompleted;
     const next = candidates
       .slice()
       .sort((a, b) => tierOf(a) - tierOf(b) || inOrder(a, pool) - inOrder(b, pool));
     lessonId = next[0].id;
   } else {
-    // Everything in the pool is done — review the weakest lesson.
     const completed = pool.filter((l) => state.completedLessons[l.id] !== undefined);
-    const weakest = completed.reduce((a, b) =>
-      (state.completedLessons[a.id] ?? 100) <= (state.completedLessons[b.id] ?? 100) ? a : b,
-    );
+    const weakest = completed.length
+      ? completed.reduce((a, b) =>
+          (state.completedLessons[a.id] ?? 100) <= (state.completedLessons[b.id] ?? 100) ? a : b,
+        )
+      : ALL_LESSONS[0];
     lessonId = weakest.id;
   }
 
-  // --- Quiz: 5 questions, drawn only from material already introduced ---
+  // --- Quiz: sized, drawn only from material already introduced ---
   const quizIds: string[] = [];
   const taken = new Set<string>();
   const push = (id: string) => {
-    if (quizIds.length < 5 && !taken.has(id) && QUIZ_BY_ID[id]) {
+    if (quizIds.length < quizCount && !taken.has(id) && QUIZ_BY_ID[id]) {
       quizIds.push(id);
       taken.add(id);
     }
   };
 
-  // 1) Unresolved mistakes — weak concepts first (focus subject prioritized)
+  const modeCategories = new Set<CategoryId>();
+  if (state.mode === 'research' && state.labProjects?.[0]?.primaryCategoryId)
+    modeCategories.add(state.labProjects[0].primaryCategoryId);
+  if (state.mode === 'homework' && state.assignments?.[0]?.primaryCategoryId)
+    modeCategories.add(state.assignments[0].primaryCategoryId);
+  if (state.mode === 'challenge' && state.focusCategory && state.focusCategory !== 'auto')
+    modeCategories.add(state.focusCategory);
+
+  // 1) Unresolved mistakes — weak concepts first (mode-relevant subjects prioritized)
   const mistakes = state.mistakes.filter((m) => !m.resolved);
   mistakes
     .sort((a, b) => {
-      const aFocus = focus && a.lessonId && LESSON_CATEGORY.get(a.lessonId) === focus ? 0 : 1;
-      const bFocus = focus && b.lessonId && LESSON_CATEGORY.get(b.lessonId) === focus ? 0 : 1;
-      return aFocus - bFocus;
+      const rel = (m: typeof a) => (m.lessonId && modeCategories.has(LESSON_CATEGORY.get(m.lessonId)!)) ? 0 : 1;
+      return rel(a) - rel(b);
     })
     .forEach((m) => push(m.id));
 
   const correctSet = new Set(state.correctQuizIds);
-  // Lessons the learner has actually finished — the only review material.
   const introduced = (q: { lessonId: string }) => state.completedLessons[q.lessonId] !== undefined;
-  const fromFocus = (q: { lessonId: string }) =>
-    focus && LESSON_CATEGORY.get(q.lessonId) === focus ? 0 : 1;
+  const relevance = (q: { lessonId: string }) => (modeCategories.has(LESSON_CATEGORY.get(q.lessonId)!) ? 0 : 1);
 
-  // 2) Not-yet-mastered exercises from completed lessons, focus subject first
+  // 2) Not-yet-mastered exercises from completed lessons, mode-relevant first
   ALL_QUIZZES.filter((q) => introduced(q) && q.lessonId !== lessonId)
     .filter((q) => !correctSet.has(q.exercise.id))
-    .sort((a, b) => fromFocus(a) - fromFocus(b))
+    .sort((a, b) => relevance(a) - relevance(b))
     .forEach((q) => push(q.exercise.id));
 
-  // 3) Mastered exercises for spaced retrieval, focus subject first
+  // 3) Mastered exercises for spaced retrieval, mode-relevant first
   ALL_QUIZZES.filter((q) => introduced(q) && q.lessonId !== lessonId)
     .filter((q) => correctSet.has(q.exercise.id))
-    .sort((a, b) => fromFocus(a) - fromFocus(b))
+    .sort((a, b) => relevance(a) - relevance(b))
     .forEach((q) => push(q.exercise.id));
 
   // 4) Last resort: exercises of today's lesson (seen during the session)
   ALL_QUIZZES.filter((q) => q.lessonId === lessonId).forEach((q) => push(q.exercise.id));
 
-  return { cardIds, lessonId, quizIds: quizIds.slice(0, 5) };
+  return { cardIds, lessonId, quizIds: quizIds.slice(0, quizCount) };
 }

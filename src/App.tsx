@@ -7,10 +7,13 @@ import { CategoryView } from './components/CategoryView';
 import { Flashcards } from './components/Flashcards';
 import { Stats } from './components/Stats';
 import { DiagnosticView } from './components/Diagnostic';
+import { Onboarding } from './components/Onboarding';
+import { Lab } from './components/Lab';
 
 type View =
   | { name: 'home' }
   | { name: 'daily' }
+  | { name: 'lab' }
   | { name: 'flashcards'; filter?: string }
   | { name: 'stats' }
   | { name: 'assess'; id?: string }
@@ -21,10 +24,12 @@ function Shell() {
   const [view, setView] = useState<View>({ name: 'home' });
   const lvl = levelFor(state.xp);
   const dueCount = Object.values(state.srs).filter((c) => isDue(c, todayStr())).length;
+  const onboarded = state.profile?.onboarded ?? false;
 
   const tabs: { id: View['name']; label: string; badge?: number }[] = [
     { id: 'home', label: 'Home' },
     { id: 'daily', label: 'Daily' },
+    { id: 'lab', label: 'My Lab' },
     { id: 'flashcards', label: 'Flashcards', badge: dueCount || undefined },
     { id: 'stats', label: 'Stats' },
   ];
@@ -41,6 +46,7 @@ function Shell() {
         }}
       />
       <header className="sticky top-0 z-20 border-b border-navy-600/50 bg-abyss/85 backdrop-blur">
+        {onboarded && (
         <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3">
           <button
             onClick={() => setView({ name: 'home' })}
@@ -80,8 +86,14 @@ function Shell() {
             </span>
           </nav>
         </div>
+        )}
       </header>
 
+      {!onboarded ? (
+        <main className="relative z-10 mx-auto max-w-5xl px-4 py-8">
+          <Onboarding mode="gate" onDone={() => setView({ name: 'home' })} />
+        </main>
+      ) : (
       <main className="relative z-10 mx-auto max-w-5xl px-4 py-8">
         {view.name === 'home' && (
           <Dashboard
@@ -89,8 +101,10 @@ function Shell() {
             onCategory={(id) => setView({ name: 'category', id })}
             onFlashcards={() => setView({ name: 'flashcards' })}
             onAssess={(id) => setView({ name: 'assess', id })}
+            onLab={() => setView({ name: 'lab' })}
           />
         )}
+        {view.name === 'lab' && <Lab />}
         {view.name === 'assess' && (
           <DiagnosticView
             initialCategory={view.id}
@@ -118,11 +132,14 @@ function Shell() {
           />
         )}
       </main>
+      )}
 
+      {onboarded && (
       <footer className="relative z-10 pb-8 pt-2 text-center text-[11px] text-slate-500">
         RoboQuest Lite · progress saved locally in this browser · Isaac Sim content is conceptual and points to
         official NVIDIA documentation
       </footer>
+      )}
     </div>
   );
 }

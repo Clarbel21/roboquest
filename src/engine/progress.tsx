@@ -1,6 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { CategoryId, Difficulty, Exercise, ProgressState, Rating } from './types';
+import type {
+  Assignment,
+  CategoryId,
+  Difficulty,
+  Exercise,
+  LearningMode,
+  ProgressState,
+  Rating,
+  ResearchProject,
+  SkillAxis,
+  UserProfile,
+} from './types';
 import { newCard, schedule, todayStr } from './srs';
 import { LESSON_BY_ID } from '../data';
 
@@ -10,9 +21,20 @@ import { LESSON_BY_ID } from '../data';
 
 const STORAGE_KEY = 'roboquest-lite-v1';
 
+/** Exercise kind → competency axis. Several kinds feed the same axis. */
+const AXIS_OF: Record<Exercise['kind'], SkillAxis> = {
+  mcq: 'recognition',
+  predict: 'application',
+  fillblank: 'application',
+  order: 'application',
+  codechallenge: 'application',
+  bughunt: 'debugging',
+  scenario: 'debugging',
+};
+
 function defaultState(): ProgressState {
   return {
-    version: 2,
+    version: 3,
     xp: 0,
     streak: { current: 0, best: 0, lastActiveDay: null, days: [] },
     completedLessons: {},
@@ -24,6 +46,11 @@ function defaultState(): ProgressState {
     dailyLog: {},
     assessment: {},
     focusCategory: 'auto',
+    profile: { name: '', experience: 'rusty', goal: 'fundamentals', dailyMinutes: 15, onboarded: false },
+    mode: 'refresh',
+    labProjects: [],
+    assignments: [],
+    axisStats: {},
   };
 }
 
@@ -32,16 +59,20 @@ function loadState(): ProgressState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
     const parsed = JSON.parse(raw) as Partial<ProgressState>;
-    // v1 -> v2 migration: everything saved under v1 (XP, streak, lessons,
-    // SRS cards, mistakes, daily log) is preserved as-is; the new fields
-    // (assessment, focusCategory) are defaulted on first load.
-    if (parsed.version !== 1 && parsed.version !== 2) return defaultState();
+    // v1 -> v2 -> v3 migrations: earlier saves are preserved field-for-field;
+    // new companion fields are defaulted on first load of a newer version.
+    if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) return defaultState();
     return {
       ...defaultState(),
       ...parsed,
-      version: 2,
+      version: 3,
       assessment: parsed.assessment ?? {},
       focusCategory: parsed.focusCategory ?? 'auto',
+      profile: { ...defaultState().profile, ...parsed.profile } as UserProfile,
+      mode: parsed.mode ?? 'refresh',
+      labProjects: parsed.labProjects ?? [],
+      assignments: parsed.assignments ?? [],
+      axisStats: parsed.axisStats ?? {},
     };
   } catch {
     return defaultState();
@@ -94,6 +125,10 @@ export interface ProgressActions {
   /** Record a placement result (from the diagnostic or a manual override). */
   setAssessment: (categoryId: CategoryId, level: Difficulty, auto: boolean) => void;
   setFocusCategory: (category: CategoryId | 'auto') => void;
+  setProfile: (profile: UserProfile) => void;
+  setMode: (mode: LearningMode) => void;
+  setLabProjects: (projects: ResearchProject[]) => void;
+  setAssignments: (assignments: Assignment[]) => void;
   /** Persist today's composed session so a reload resumes it exactly. */
   ensureDaily: (session: { cardIds: string[]; lessonId: string; quizIds: string[] }) => void;
   resetProgress: () => void;
@@ -137,6 +172,25 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
           const firstTime = !s.correctQuizIds.includes(exercise.id);
           s.totalAnswered += 1;
           s.xp += result.correct ? (firstTime ? 8 : 3) : 0;
+
+          // Competency axes: attempts and corrects per skill dimension.
+          const axis = AXIS_OF[exercise.kind];
+          const prev = s.axisStats?.[axis] ?? { correct: 0, attempts: 0 };
+          s.axisStats = {
+            ...(s.axisStats ?? {}),
+            [axis]: {
+              attempts: prev.attempts + 1,
+              correct: prev.correct + (result.correct ? 1 : 0),
+            },
+          };
+          // A scenario diagnosis is also a (structured) explanation act.
+          if (exercise.kind === 'scenario') {
+            const expPrev = s.axisStats?.explanation ?? { correct: 0, attempts: 0 };
+            s.axisStats.explanation = {
+              attempts: expPrev.attempts + 1,
+              correct: expPrev.correct + (result.correct ? 1 : 0),
+            };
+          }
 
           if (result.correct) {
             s.totalCorrect += 1;
@@ -212,6 +266,22 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
 
       setFocusCategory: (category) => {
         setState((s0) => ({ ...s0, focusCategory: category }));
+      },
+
+      setProfile: (profile) => {
+        setState((s0) => ({ ...s0, profile: { ...profile, onboarded: true } }));
+      },
+
+      setMode: (mode) => {
+        setState((s0) => ({ ...s0, mode }));
+      },
+
+      setLabProjects: (projects) => {
+        setState((s0) => ({ ...s0, labProjects: projects }));
+      },
+
+      setAssignments: (assignments) => {
+        setState((s0) => ({ ...s0, assignments }));
       },
 
       ensureDaily: (session) => {

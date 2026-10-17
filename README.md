@@ -50,8 +50,15 @@ npm run preview    # serves the dist/ build at http://localhost:4173
   reload resumes exactly where you left off.
 - **Progress** (`src/engine/progress.tsx`): XP, levels, streaks, per-lesson scores,
   mistake notebook, and a 14-day activity strip — all in `localStorage`
-  (key `roboquest-lite-v1`, schema v2; v1 data migrates automatically on load).
+  (key `roboquest-lite-v1`, schema v3; v1/v2 data migrates automatically on load).
   Export to JSON from the Stats page.
+- **Personal companion**: skippable onboarding (name, level, goal, duration, focus),
+  personalized greetings, four daily learning modes (Refresh / Research / Homework /
+  Engineering Challenge), and **My Learning Lab** — research projects and homework
+  assignments become tier-ordered lesson pathways via transparent keyword matching.
+- **Competency map**: recognition, application, debugging, and explanation are
+  tracked separately (multiple-choice accuracy is deliberately not treated as
+  proof of practical mastery).
 - **Light, soft-blue theme** with frosted-white cards; palette lives in
   `tailwind.config.js`.
 - **Exercise types** (all answer-validated, no user code is ever executed):

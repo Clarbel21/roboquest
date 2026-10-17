@@ -243,6 +243,100 @@ export interface AssessmentResult {
   auto: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Personal companion: profile, learning modes, and the Learning Lab.
+// ---------------------------------------------------------------------------
+
+export type ExperienceLevel = 'new' | 'rusty' | 'working' | 'advanced';
+
+export const EXPERIENCE_LABEL: Record<ExperienceLevel, string> = {
+  new: 'New to the field',
+  rusty: 'Rusty, refreshing',
+  working: 'Working knowledge',
+  advanced: 'Advanced',
+};
+
+export type LearningGoal =
+  | 'fundamentals'
+  | 'isaac'
+  | 'ros2'
+  | 'coursework'
+  | 'career';
+
+export const GOAL_LABEL: Record<LearningGoal, string> = {
+  fundamentals: 'Rebuild my engineering fundamentals',
+  isaac: 'Master NVIDIA Isaac Sim',
+  ros2: 'Wire up ROS 2 & sim-to-real',
+  coursework: 'Support my university coursework',
+  career: 'Prepare for industry roles',
+};
+
+export type FocusArea = 'software-engineering' | 'applied-ai' | 'robotics-research' | 'coursework';
+
+export const FOCUS_LABEL: Record<FocusArea, string> = {
+  'software-engineering': 'Software Engineering',
+  'applied-ai': 'Applied AI',
+  'robotics-research': 'Robotics Research',
+  coursework: 'Coursework',
+};
+
+export interface UserProfile {
+  name: string;
+  experience: ExperienceLevel;
+  goal: LearningGoal;
+  /** 5, 15, or 30 minutes per daily mission. */
+  dailyMinutes: 5 | 15 | 30;
+  focusArea?: FocusArea;
+  onboarded: boolean;
+}
+
+export type LearningMode = 'refresh' | 'research' | 'homework' | 'challenge';
+
+export const MODE_LABEL: Record<LearningMode, string> = {
+  refresh: 'Refresh My Memory',
+  research: 'Research Preparation',
+  homework: 'Homework Preparation',
+  challenge: 'Engineering Challenge',
+};
+
+/** Competency axes measured from exercise kinds (recognition ≠ mastery). */
+export type SkillAxis = 'recognition' | 'application' | 'debugging' | 'explanation';
+
+// --- Learning Lab ------------------------------------------------------------
+
+export interface ResearchProject {
+  id: string;
+  title: string;
+  description: string;
+  /** One objective per line. */
+  objectives: string[];
+  /** Open engineering challenges — trackable as resolved. */
+  challenges: string[];
+  challengesResolved: boolean[];
+  /** Skills the user wants to develop; user marks them learned. */
+  skills: string[];
+  skillsLearned: boolean[];
+  /** Derived at save time by the recommendation engine. */
+  primaryCategoryId?: CategoryId;
+  recommendedLessonIds: string[];
+  createdAt: string;
+}
+
+export interface Assignment {
+  id: string;
+  course: string;
+  title: string;
+  description: string;
+  /** Optional deadline (yyyy-mm-dd). */
+  deadline?: string;
+  /** Skills/knowledge the assignment requires, one per line. */
+  skills: string[];
+  /** Derived at save time by the recommendation engine. */
+  primaryCategoryId?: CategoryId;
+  recommendedLessonIds: string[];
+  createdAt: string;
+}
+
 export interface Flashcard {
   id: string;
   categoryId: CategoryId;
@@ -318,4 +412,11 @@ export interface ProgressState {
   assessment?: Partial<Record<CategoryId, AssessmentResult>>;
   /** v2: 'auto' follows the learning path; a CategoryId focuses daily missions. */
   focusCategory?: CategoryId | 'auto';
+  /** v3: personal companion state — all fields optional for older saves. */
+  profile?: UserProfile;
+  mode?: LearningMode;
+  labProjects?: ResearchProject[];
+  assignments?: Assignment[];
+  /** Per-axis competency: correct/attempts per SkillAxis. */
+  axisStats?: Partial<Record<SkillAxis, { correct: number; attempts: number }>>;
 }
