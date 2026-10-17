@@ -16,13 +16,19 @@ export function LessonRunner({ lesson, onExit }: { lesson: Lesson; onExit: () =>
   const [finished, setFinished] = useState(false);
   const [xpEarned, setXpEarned] = useState(0);
   const awarded = useRef(false);
+  // Synchronous tallies — React state updates batch too late for advance()
+  // to read on the final exercise, which recorded stale scores.
+  const correctTally = useRef(0);
+  const answerTally = useRef(0);
 
   const exercises = lesson.steps.filter((s) => s.kind === 'exercise');
   const total = lesson.steps.length;
 
   function handleExerciseDone(correct: boolean) {
-    setAnswerCount((n) => n + 1);
-    if (correct) setCorrectCount((n) => n + 1);
+    answerTally.current += 1;
+    if (correct) correctTally.current += 1;
+    setAnswerCount(answerTally.current);
+    if (correct) setCorrectCount(correctTally.current);
     advance();
   }
 
@@ -30,7 +36,7 @@ export function LessonRunner({ lesson, onExit }: { lesson: Lesson; onExit: () =>
     if (stepIndex + 1 >= total) {
       if (!awarded.current) {
         awarded.current = true;
-        const scorePct = exercises.length ? Math.round((correctCount / exercises.length) * 100) : 100;
+        const scorePct = exercises.length ? Math.round((correctTally.current / exercises.length) * 100) : 100;
         const { xpEarned } = actions.completeLesson(lesson.id, scorePct);
         setXpEarned(xpEarned);
       }

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CARD_BY_ID, LESSON_BY_ID, QUIZ_BY_ID } from '../data';
+import { CATEGORIES, CARD_BY_ID, LESSON_BY_ID, QUIZ_BY_ID } from '../data';
 import { getDailySession } from '../engine/daily';
 import { useProgress } from '../engine/progress';
 import { todayStr } from '../engine/srs';
-import type { ProgressState } from '../engine/types';
+import type { CategoryId, ProgressState } from '../engine/types';
 import { Btn, Card, ProgressBar, SectionTitle } from './ui';
 import { FlashcardRunner } from './FlashcardRunner';
 import { LessonRunner } from './LessonRunner';
@@ -91,6 +91,22 @@ export function DailyMission({ onHome, onFlashcards }: { onHome: () => void; onF
     <div className="mx-auto max-w-2xl animate-slide-up">
       <div className="mb-5">
         <SectionTitle>Today's mission</SectionTitle>
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs text-slate-500">Focus:</span>
+          <FocusChip
+            active={state.focusCategory === 'auto' || !state.focusCategory}
+            onClick={() => actions.setFocusCategory('auto')}
+            label="Auto"
+          />
+          {CATEGORIES.map((c) => (
+            <FocusChip
+              key={c.id}
+              active={state.focusCategory === c.id}
+              onClick={() => actions.setFocusCategory(c.id as CategoryId)}
+              label={`${c.icon} ${c.name}`}
+            />
+          ))}
+        </div>
         <div className="flex gap-2">
           {['Review', 'Lesson', 'Quiz'].map((name, i) => (
             <div key={name} className="flex-1">
@@ -184,4 +200,19 @@ export function dailyHeadline(state: ProgressState): { done: boolean; text: stri
   const entry = state.dailyLog[todayStr()];
   if (entry?.done) return { done: true, text: "Today's mission is complete. Legend." };
   return { done: false, text: '15 minutes today keeps the forgetting curve away.' };
+}
+
+function FocusChip({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+        active
+          ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-800'
+          : 'border-navy-600/70 bg-navy-900/40 text-slate-400 hover:border-cyan-400/30 hover:text-slate-500'
+      }`}
+    >
+      {label}
+    </button>
+  );
 }

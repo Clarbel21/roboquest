@@ -1,10 +1,21 @@
-import { ALL_CARDS, ALL_LESSONS, ALL_QUIZZES, QUIZ_BY_ID } from '../data';
-import type { ProgressState } from './types';
+import { ALL_CARDS, ALL_LESSONS, ALL_QUIZZES, CATEGORIES, QUIZ_BY_ID } from '../data';
+import type { CategoryId, ProgressState } from './types';
+import { DIFFICULTY_ORDER } from './types';
 import { isDue, todayStr } from './srs';
+import type { Lesson } from './types';
 
-// The daily session: 5 review flashcards + 1 short lesson + 5 quiz questions.
-// Composition is derived from progress and persisted for the day, so closing
-// the app mid-session resumes exactly where you left off.
+// The daily session: 5 review flashcards + 1 lesson + 5 quiz questions.
+//
+// Adaptive selection:
+//  - Focus subject: if the learner picked one, the daily lesson comes from
+//    that category (others keep working via the category pages).
+//  - Proficiency: lessons below the assessed starting tier are not pushed as
+//    "next up" (they stay available on the category page).
+//  - Weak concepts: review quizzes draw from unresolved mistakes first, then
+//    exercises of COMPLETED lessons — never from material not yet introduced.
+//
+// The composed session persists for the day, so closing the app mid-session
+// resumes exactly where you left off.
 
 export interface DailySession {
   day: string;
@@ -12,6 +23,18 @@ export interface DailySession {
   lessonId: string;
   quizIds: string[];
   done: boolean;
+}
+
+const LESSON_CATEGORY: Map<string, CategoryId> = new Map(
+  CATEGORIES.flatMap((c) => c.lessons.map((l) => [l.id, c.id] as const)),
+);
+
+function tierOf(lesson: Lesson): number {
+  return DIFFICULTY_ORDER.indexOf(lesson.difficulty ?? 'foundation');
+}
+
+function inOrder<T>(item: T, pool: T[]): number {
+  return pool.indexOf(item);
 }
 
 export function getDailySession(state: ProgressState): DailySession {
@@ -42,63 +65,74 @@ function composeDaily(state: ProgressState, day: string): Omit<DailySession, 'da
   const newIds = ALL_CARDS.filter((c) => !seen.has(c.id)).map((c) => c.id);
   const cardIds = [...dueIds, ...newIds].slice(0, 5);
 
-  // --- Lesson: first uncompleted in path order; else weakest for review ---
-  const nextLesson = ALL_LESSONS.find((l) => state.completedLessons[l.id] === undefined);
+  // --- Lesson: focus subject first, proficiency-aware, tier-ordered ---
+  const focus = state.focusCategory && state.focusCategory !== 'auto' ? state.focusCategory : null;
+  const pool: Lesson[] = focus ? CATEGORIES.find((c) => c.id === focus)!.lessons : ALL_LESSONS;
+
+  const uncompleted = pool.filter((l) => state.completedLessons[l.id] === undefined);
   let lessonId: string;
-  if (nextLesson) {
-    lessonId = nextLesson.id;
+  if (uncompleted.length > 0) {
+    const assessed = focus ? state.assessment?.[focus]?.level : undefined;
+    const minTier = assessed ? DIFFICULTY_ORDER.indexOf(assessed) : 0;
+    // Do not push tiers below the assessed starting point; Engineering
+    // Missions are never skipped by assessment.
+    const eligible = uncompleted.filter(
+      (l) => tierOf(l) >= minTier || (l.difficulty ?? 'foundation') === 'mission',
+    );
+    const candidates = eligible.length > 0 ? eligible : uncompleted;
+    const next = candidates
+      .slice()
+      .sort((a, b) => tierOf(a) - tierOf(b) || inOrder(a, pool) - inOrder(b, pool));
+    lessonId = next[0].id;
   } else {
-    const weakest = ALL_LESSONS.reduce((a, b) =>
+    // Everything in the pool is done — review the weakest lesson.
+    const completed = pool.filter((l) => state.completedLessons[l.id] !== undefined);
+    const weakest = completed.reduce((a, b) =>
       (state.completedLessons[a.id] ?? 100) <= (state.completedLessons[b.id] ?? 100) ? a : b,
     );
     lessonId = weakest.id;
   }
 
-  // --- Quiz: 5 questions, retrieval practice over past material ---
+  // --- Quiz: 5 questions, drawn only from material already introduced ---
   const quizIds: string[] = [];
   const taken = new Set<string>();
-
-  // 1) Unresolved mistakes (retest what was missed)
-  const mistakeIds = state.mistakes
-    .filter((m) => !m.resolved && QUIZ_BY_ID[m.id] && m.id !== undefined)
-    .map((m) => m.id);
-  for (const id of mistakeIds) {
-    if (quizIds.length < 2 && !taken.has(id)) {
+  const push = (id: string) => {
+    if (quizIds.length < 5 && !taken.has(id) && QUIZ_BY_ID[id]) {
       quizIds.push(id);
       taken.add(id);
     }
-  }
+  };
 
-  // 2) Not-yet-mastered exercises from completed lessons, excluding today's lesson
+  // 1) Unresolved mistakes — weak concepts first (focus subject prioritized)
+  const mistakes = state.mistakes.filter((m) => !m.resolved);
+  mistakes
+    .sort((a, b) => {
+      const aFocus = focus && a.lessonId && LESSON_CATEGORY.get(a.lessonId) === focus ? 0 : 1;
+      const bFocus = focus && b.lessonId && LESSON_CATEGORY.get(b.lessonId) === focus ? 0 : 1;
+      return aFocus - bFocus;
+    })
+    .forEach((m) => push(m.id));
+
   const correctSet = new Set(state.correctQuizIds);
-  const reviewPool = ALL_QUIZZES.filter(
-    (q) => q.lessonId !== lessonId && state.completedLessons[q.lessonId] !== undefined,
-  );
-  const weak = reviewPool.filter((q) => !correctSet.has(q.exercise.id)).map((q) => q.exercise.id);
-  const solid = reviewPool.filter((q) => correctSet.has(q.exercise.id)).map((q) => q.exercise.id);
-  for (const id of [...weak, ...solid]) {
-    if (quizIds.length < 4 && !taken.has(id)) {
-      quizIds.push(id);
-      taken.add(id);
-    }
-  }
+  // Lessons the learner has actually finished — the only review material.
+  const introduced = (q: { lessonId: string }) => state.completedLessons[q.lessonId] !== undefined;
+  const fromFocus = (q: { lessonId: string }) =>
+    focus && LESSON_CATEGORY.get(q.lessonId) === focus ? 0 : 1;
 
-  // 3) Fill from anything (excluding today's lesson so it is not seen twice)
-  const anyPool = ALL_QUIZZES.filter((q) => q.lessonId !== lessonId).map((q) => q.exercise.id);
-  for (const id of anyPool) {
-    if (quizIds.length < 5 && !taken.has(id)) {
-      quizIds.push(id);
-      taken.add(id);
-    }
-  }
-  // 4) Last resort: today's lesson exercises
-  const todayPool = ALL_QUIZZES.filter((q) => q.lessonId === lessonId).map((q) => q.exercise.id);
-  for (const id of todayPool) {
-    if (quizIds.length < 5 && !taken.has(id)) {
-      quizIds.push(id);
-      taken.add(id);
-    }
-  }
+  // 2) Not-yet-mastered exercises from completed lessons, focus subject first
+  ALL_QUIZZES.filter((q) => introduced(q) && q.lessonId !== lessonId)
+    .filter((q) => !correctSet.has(q.exercise.id))
+    .sort((a, b) => fromFocus(a) - fromFocus(b))
+    .forEach((q) => push(q.exercise.id));
 
-  return { cardIds, lessonId, quizIds };
+  // 3) Mastered exercises for spaced retrieval, focus subject first
+  ALL_QUIZZES.filter((q) => introduced(q) && q.lessonId !== lessonId)
+    .filter((q) => correctSet.has(q.exercise.id))
+    .sort((a, b) => fromFocus(a) - fromFocus(b))
+    .forEach((q) => push(q.exercise.id));
+
+  // 4) Last resort: exercises of today's lesson (seen during the session)
+  ALL_QUIZZES.filter((q) => q.lessonId === lessonId).forEach((q) => push(q.exercise.id));
+
+  return { cardIds, lessonId, quizIds: quizIds.slice(0, 5) };
 }

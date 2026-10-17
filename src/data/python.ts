@@ -645,6 +645,139 @@ export const pythonCategory: Category = {
         },
       ],
     },
+    {
+      id: 'py-p1-code',
+      title: 'Practical: Harden the Sensor Reader',
+      minutes: 10,
+      xp: 60,
+      difficulty: 'application',
+      narrative:
+        'Enough recognizing — time to write. The facility\'s sensor-reader script needs three changes, and you are writing the actual lines. Byte checks them structurally and explains every miss.',
+      steps: [
+        {
+          kind: 'teach',
+          heading: 'How these coding challenges work',
+          body:
+            'You will write **real lines of Python** into labeled slots. Your code is checked structurally — normalized text matching against accepted answers — and it is **not executed**. That is an honest limitation of a browser app: it keeps the environment safe and instant, but it means the checker accepts phrasing variants rather than verifying runtime behavior.\n\nThe discipline that makes this work anyway: after checking here, paste the result into a real Python session and run it. The habit — write, reason about what it should do, then verify by executing — is the actual skill. The checker grades your line; the interpreter grades your understanding.',
+          keyPoints: [
+            'You write real Python; it is validated by structure, not executed',
+            'Exact style is flexible — the checker accepts common correct variants',
+            'Verify in a real interpreter afterward: the habit is the skill',
+          ],
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'codechallenge',
+            id: 'py-cc-average',
+            prompt:
+              'The calibration script crashes with ZeroDivisionError whenever a sensor returns no readings. Fix it: add a guard for the empty case (report "no readings" and use 0.0), and keep the normal division for non-empty input.',
+            language: 'python',
+            code: 'readings = [10.0, 20.0, 30.0]\n\n# your changes below\naverage = sum(readings) / len(readings)\nprint(average)',
+            slots: [
+              {
+                id: 's1',
+                label: 'guard clause — open a branch for the empty list',
+                accept: [
+                  'if not readings:',
+                  'if len(readings) == 0:',
+                  'if len(readings) < 1:',
+                  'if readings == []:',
+                ],
+                requireAny: ['if '],
+                forbid: ['else'],
+                hint: 'An empty list is falsy in Python — the whole condition can be "if not <list>:"',
+              },
+              {
+                id: 's2',
+                label: 'inside the guard: define the fallback average',
+                accept: ['average = 0.0', 'average = 0'],
+                requireAny: ['= 0'],
+                hint: 'What number should "the average of nothing" report? Set average to it.',
+              },
+              {
+                id: 's3',
+                label: 'inside the guard: tell the operator why',
+                accept: [
+                  'print("no readings")',
+                  "print('no readings')",
+                  'print("no data")',
+                  "print('no data')",
+                ],
+                requireAny: ['print('],
+                hint: 'A short print explaining the empty case — silence looks identical to a crash from the control room.',
+              },
+            ],
+            solution:
+              'readings = [10.0, 20.0, 30.0]\n\nif not readings:\n    print("no readings")\n    average = 0.0\nelse:\n    average = sum(readings) / len(readings)\nprint(average)',
+            explanation:
+              'The shape to internalize: **guard clause first, expensive path in else**. Empty input is a normal case for a sensor — the guard decides what "average of nothing" means (a defined default plus a visible message) before the division is ever attempted. `if not readings:` is the idiomatic spelling: empty sequences are falsy, so the condition reads as English. Verify in a real interpreter after checking — paste it in and run both branches.',
+            hint: 'Three slots, top to bottom: the if-line, the fallback value, the operator message.',
+          },
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'codechallenge',
+            id: 'py-cc-function',
+            prompt:
+              'Now package the logic as a reusable function other scripts can import. Complete `safe_average` so it returns None for empty input and the computed mean otherwise.',
+            language: 'python',
+            code: 'def safe_average(values):\n    # slot 1: guard for the empty case\n\n    # slot 2: what to return when empty\n\n    # slot 3: the computed mean for normal input\n',
+            slots: [
+              {
+                id: 's1',
+                label: 'guard clause for the empty case',
+                accept: ['if not values:', 'if len(values) == 0:', 'if len(values) < 1:'],
+                requireAny: ['if '],
+              },
+              {
+                id: 's2',
+                label: 'return value for the empty case',
+                accept: ['return None', 'return none', 'return 0.0', 'return 0'],
+                requireAny: ['return'],
+              },
+              {
+                id: 's3',
+                label: 'return the computed mean',
+                accept: ['return sum(values) / len(values)'],
+                requireAny: ['sum(', '/ len('],
+                hint: 'Same division as before — but now it leaves the function with return.',
+              },
+            ],
+            solution:
+              'def safe_average(values):\n    if not values:\n        return None\n    return sum(values) / len(values)',
+            explanation:
+              'Two idioms meet here. **Return None for "no answer"** — callers test it explicitly (`if avg is None:`) instead of receiving a magic number that could be mistaken for real data. And the single-expression return keeps the happy path on one line. Callers now decide what empty means for them — the function states what it does and refuses to guess.',
+            hint: 'Each slot is a single line. Guard, guard-return, mean-return.',
+          },
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'mcq',
+            id: 'py-cc-verify',
+            prompt:
+              'The structural checker accepted your guard clause, but at runtime the script still crashes on empty input. What is the most likely real-world explanation?',
+            options: [
+              { id: 'a', text: 'The checker is unreliable — structural validation never reflects runtime behavior' },
+              { id: 'b', text: 'The accepted line is present but mis-indented, so it sits outside the branch that guards the division' },
+              { id: 'c', text: 'Python only honors guard clauses on Tuesdays' },
+              { id: 'd', text: 'ZeroDivisionError cannot be prevented by conditionals' },
+            ],
+            correctId: 'b',
+            optionNotes: {
+              a: 'Overstated: structural checks verify real, useful properties (the line exists, names match) — they just cannot verify indentation semantics, flow, or runtime values. That gap is exactly why execution matters.',
+              c: 'If only. Determinism is Python\'s best feature.',
+              d: 'A conditional that skips the division on empty input is precisely how ZeroDivisionError is prevented.',
+            },
+            explanation:
+              'Indentation is syntax in Python — a guard at the wrong indent depth guards nothing. This is the honest boundary of structural checking: it sees the words, not the structure\'s meaning. Hence the habit from the first step: after the checker agrees, run the code. The checker is the spell-checker; the interpreter is the editor.',
+            hint: 'What does a text matcher not see that the interpreter does?',
+          },
+        },
+      ],
+    },
   ],
   flashcards: [
     {

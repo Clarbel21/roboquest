@@ -6,12 +6,14 @@ import { DailyMission } from './components/DailyMission';
 import { CategoryView } from './components/CategoryView';
 import { Flashcards } from './components/Flashcards';
 import { Stats } from './components/Stats';
+import { DiagnosticView } from './components/Diagnostic';
 
 type View =
   | { name: 'home' }
   | { name: 'daily' }
   | { name: 'flashcards'; filter?: string }
   | { name: 'stats' }
+  | { name: 'assess'; id?: string }
   | { name: 'category'; id: string };
 
 function Shell() {
@@ -86,6 +88,13 @@ function Shell() {
             onDaily={() => setView({ name: 'daily' })}
             onCategory={(id) => setView({ name: 'category', id })}
             onFlashcards={() => setView({ name: 'flashcards' })}
+            onAssess={(id) => setView({ name: 'assess', id })}
+          />
+        )}
+        {view.name === 'assess' && (
+          <DiagnosticView
+            initialCategory={view.id}
+            onDone={() => setView({ name: 'stats' })}
           />
         )}
         {view.name === 'daily' && (
@@ -100,7 +109,7 @@ function Shell() {
             onHome={() => setView({ name: 'home' })}
           />
         )}
-        {view.name === 'stats' && <Stats />}
+        {view.name === 'stats' && <Stats onAssess={(id) => setView({ name: 'assess', id })} />}
         {view.name === 'category' && (
           <CategoryView
             categoryId={view.id}

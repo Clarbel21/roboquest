@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import type { Exercise, FillBlankExercise } from '../engine/types';
-import { gradeExercise } from '../engine/grading';
+import type { CodeChallengeExercise, Exercise, FillBlankExercise, ScenarioExercise } from '../engine/types';
+import { gradeExercise, normCode } from '../engine/grading';
 import type { Grade, QuizResponse } from '../engine/grading';
 import { useProgress } from '../engine/progress';
-import { Btn, CodeBlock, Markdown } from './ui';
+import { Btn, Card, CodeBlock, Markdown } from './ui';
 
 // Renders one interactive exercise, grades it, and teaches from the answer:
 // explanation + why the chosen distractor was wrong + fix walkthrough.
@@ -28,9 +28,11 @@ export function QuizCard({
   const hint = 'hint' in exercise ? exercise.hint : undefined;
   const ready = isReady(exercise, response);
 
-  function check() {
-    if (!response || grade) return;
-    const g = gradeExercise(exercise, response);
+  function check(explicit?: QuizResponse) {
+    if (grade) return;
+    const r = explicit ?? response;
+    if (!r) return;
+    const g = gradeExercise(exercise, r);
     actions.answerQuiz(lessonId, exercise, {
       correct: g.correct,
       yourAnswer: g.yourAnswer,
@@ -51,7 +53,14 @@ export function QuizCard({
         {'prompt' in exercise ? exercise.prompt : ''}
       </p>
 
-      <Body exercise={exercise} response={response} setResponse={setResponse} disabled={!!grade} graded={!!grade} />
+      <Body
+        exercise={exercise}
+        response={response}
+        setResponse={setResponse}
+        disabled={!!grade}
+        graded={!!grade}
+        onSubmit={check}
+      />
 
       {hint && !grade && (
         <div className="mt-3">
@@ -71,12 +80,14 @@ export function QuizCard({
       )}
 
       {!grade ? (
-        <div className="mt-5 flex items-center gap-3">
-          <Btn onClick={check} disabled={!ready}>
-            Check answer
-          </Btn>
-          {!ready && <span className="text-xs text-slate-500">Answer to continue</span>}
-        </div>
+        exercise.kind === 'scenario' ? null : (
+          <div className="mt-5 flex items-center gap-3">
+            <Btn onClick={() => check()} disabled={!ready}>
+              Check answer
+            </Btn>
+            {!ready && <span className="text-xs text-slate-500">Answer to continue</span>}
+          </div>
+        )
       ) : (
         <Explanation exercise={exercise} grade={grade} xpGain={xpGain} onDone={() => onDone(grade.correct)} />
       )}
@@ -85,9 +96,12 @@ export function QuizCard({
 }
 
 function explanationFor(exercise: Exercise, g: Grade): string {
-  const base = 'explanation' in exercise ? exercise.explanation : '';
-  if (exercise.kind === 'bughunt') return g.correct ? base : `${base}\n\n${exercise.fixExplanation}`;
-  return base;
+  if (exercise.kind === 'bughunt') return g.correct ? exercise.explanation : `${exercise.explanation}\n\n${exercise.fixExplanation}`;
+  if (exercise.kind === 'scenario')
+    return g.correct
+      ? exercise.wrapUp
+      : `${exercise.diagnosis.explanation}\n\n${exercise.wrapUp}`;
+  return 'explanation' in exercise ? exercise.explanation : '';
 }
 
 function isReady(ex: Exercise, r: QuizResponse | null): boolean {
@@ -105,6 +119,12 @@ function isReady(ex: Exercise, r: QuizResponse | null): boolean {
       return r.itemIds.length === (ex as Extract<Exercise, { kind: 'order' }>).items.length;
     case 'bughunt':
       return r.line > 0 && !!r.causeId;
+    case 'scenario':
+      return !!r.diagnosisId;
+    case 'codechallenge': {
+      const ee = ex as CodeChallengeExercise;
+      return ee.slots.every((s) => (r.values[s.id] ?? '').trim() !== '');
+    }
   }
 }
 
@@ -116,12 +136,14 @@ function Body({
   setResponse,
   disabled,
   graded,
+  onSubmit,
 }: {
   exercise: Exercise;
   response: QuizResponse | null;
   setResponse: (r: QuizResponse) => void;
   disabled: boolean;
   graded: boolean;
+  onSubmit: (r?: QuizResponse) => void;
 }) {
   switch (exercise.kind) {
     case 'mcq':
@@ -142,7 +164,252 @@ function Body({
           graded={graded}
         />
       );
+    case 'scenario':
+      return <ScenarioBody exercise={exercise} disabled={disabled} onSubmit={onSubmit} />;
+    case 'codechallenge':
+      return (
+        <CodeChallengeBody
+          exercise={exercise}
+          response={response}
+          setResponse={setResponse}
+          disabled={disabled}
+          graded={graded}
+        />
+      );
   }
+}
+
+// --- Scenario: staged troubleshooting with immediate feedback, then a final
+// diagnosis that is the recorded answer. --------------------------------------
+
+function ScenarioBody({
+  exercise,
+  disabled,
+  onSubmit,
+}: {
+  exercise: ScenarioExercise;
+  disabled: boolean;
+  onSubmit: (r: QuizResponse) => void;
+}) {
+  const [stageIdx, setStageIdx] = useState(0);
+  const [picks, setPicks] = useState<Record<string, string>>({});
+  const [wrongStages, setWrongStages] = useState(0);
+  const total = exercise.stages.length;
+  const inDiagnosis = stageIdx >= total;
+  const submitted = disabled; // parent sets disabled once graded
+
+  function pickStage(stageIndex: number, optionId: string) {
+    if (picks[stageIndex] !== undefined || disabled) return;
+    const stage = exercise.stages[stageIndex];
+    setPicks((p) => ({ ...p, [stageIndex]: optionId }));
+    if (optionId !== stage.correctId) setWrongStages((n) => n + 1);
+  }
+
+  function pickDiagnosis(optionId: string) {
+    if (submitted) return;
+    onSubmit({ kind: 'scenario', diagnosisId: optionId, stageWrong: wrongStages });
+  }
+
+  return (
+    <div>
+      <div className="mb-4 rounded-2xl border border-cyan-400/30 bg-cyan-400/5 p-4">
+        <Markdown text={exercise.prompt} />
+      </div>
+      {exercise.context && (
+        <div className="mb-4">
+          <CodeBlock code={exercise.context} language={exercise.contextLabel} />
+        </div>
+      )}
+
+      {!inDiagnosis ? (
+        (() => {
+          const stage = exercise.stages[stageIdx];
+          const picked = picks[stageIdx];
+          return (
+            <div className="animate-slide-up">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-700">
+                <span>
+                  Step {stageIdx + 1} / {total}
+                </span>
+                <span className="text-slate-500">·</span>
+                <span className="text-slate-400">{stage.title}</span>
+              </div>
+              <Markdown text={stage.situation} className="mb-4" />
+              <p className="mb-3 text-[15px] font-medium text-slate-100">{stage.question}</p>
+              <div className="space-y-2">
+                {stage.options.map((o) => {
+                  const state =
+                    picked === undefined
+                      ? 'idle'
+                      : o.id === stage.correctId
+                        ? 'correct'
+                        : o.id === picked
+                          ? 'wrong'
+                          : 'idle';
+                  return (
+                    <button
+                      key={o.id}
+                      disabled={disabled || picked !== undefined}
+                      onClick={() => pickStage(stageIdx, o.id)}
+                      className={`w-full rounded-xl border px-4 py-2.5 text-left text-sm transition-colors disabled:cursor-default ${optionClasses(
+                        o.id === picked,
+                        state as 'idle' | 'correct' | 'wrong',
+                      )}`}
+                    >
+                      {o.text}
+                    </button>
+                  );
+                })}
+              </div>
+              {picked !== undefined && (
+                <div className="mt-4 animate-pop">
+                  <div
+                    className={`rounded-xl border p-3 ${
+                      picked === stage.correctId
+                        ? 'border-emerald-400/40 bg-emerald-400/5'
+                        : 'border-rose-400/40 bg-rose-400/5'
+                    }`}
+                  >
+                    <div
+                      className={`mb-1 text-xs font-semibold ${
+                        picked === stage.correctId ? 'text-emerald-700' : 'text-rose-700'
+                      }`}
+                    >
+                      {picked === stage.correctId ? '✓ Good call' : '✗ Not the best call'}
+                    </div>
+                    {picked !== stage.correctId && stage.optionNotes?.[picked] && (
+                      <p className="mb-2 text-xs text-amber-800">{stage.optionNotes[picked]}</p>
+                    )}
+                    <Markdown text={stage.explanation} className="!text-[13px]" />
+                  </div>
+                  <div className="mt-4">
+                    <Btn
+                      onClick={() => {
+                        if (stageIdx + 1 >= total) setStageIdx(total);
+                        else setStageIdx((i) => i + 1);
+                      }}
+                    >
+                      {stageIdx + 1 >= total ? 'Make the final diagnosis →' : 'Next step →'}
+                    </Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()
+      ) : (
+        <div className="animate-slide-up">
+          <div className="mb-3 text-xs font-semibold uppercase tracking-widest text-rose-700">
+            Final diagnosis
+          </div>
+          <p className="mb-1 text-sm text-slate-400">
+            {wrongStages === 0
+              ? 'Clean investigation so far — commit to your diagnosis.'
+              : `${wrongStages} earlier decision${wrongStages > 1 ? 's' : ''} could have been better. Commit to your diagnosis.`}
+          </p>
+          <p className="mb-3 text-[15px] font-medium text-slate-100">{exercise.diagnosis.question}</p>
+          <div className="space-y-2">
+            {exercise.diagnosis.options.map((o) => (
+              <button
+                key={o.id}
+                disabled={disabled}
+                onClick={() => pickDiagnosis(o.id)}
+                className="w-full rounded-xl border border-navy-600/80 bg-navy-800/60 px-4 py-2.5 text-left text-sm text-slate-200 transition-colors hover:border-cyan-400/40 disabled:cursor-default"
+              >
+                {o.text}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Structured coding challenge: write real lines, validated by pattern
+//     matching (nothing is executed — the UI says so). ------------------------
+
+function CodeChallengeBody({
+  exercise,
+  response,
+  setResponse,
+  disabled,
+  graded,
+}: {
+  exercise: CodeChallengeExercise;
+  response: QuizResponse | null;
+  setResponse: (r: QuizResponse) => void;
+  disabled: boolean;
+  graded: boolean;
+}) {
+  const values = response?.kind === 'codechallenge' ? response.values : {};
+
+  function setValue(id: string, v: string) {
+    setResponse({ kind: 'codechallenge', values: { ...values, [id]: v } });
+  }
+
+  const slotPass = (id: string): boolean | null => {
+    if (!graded) return null;
+    const slot = exercise.slots.find((s) => s.id === id)!;
+    const v = normCode(values[id] ?? '');
+    if (!v) return false;
+    if (slot.accept.some((a) => normCode(a).toLowerCase() === v.toLowerCase())) return true;
+    if (slot.requireAny) {
+      const has = slot.requireAny.some((sub) => v.toLowerCase().includes(sub.toLowerCase()));
+      const bad = (slot.forbid ?? []).some((sub) => v.toLowerCase().includes(sub.toLowerCase()));
+      return has && !bad;
+    }
+    return false;
+  };
+
+  return (
+    <div className="space-y-4">
+      <CodeBlock code={exercise.code} language={exercise.language} />
+      <div className="space-y-3">
+        {exercise.slots.map((slot, i) => {
+          const pass = slotPass(slot.id);
+          return (
+            <div key={slot.id}>
+              <div className="mb-1 flex items-center gap-2 text-xs">
+                <span className="flex h-5 w-5 items-center justify-center rounded bg-navy-700 px-1.5 font-mono text-[10px] text-slate-400">
+                  {i + 1}
+                </span>
+                <span className="text-slate-400">{slot.label}</span>
+                {pass !== null && (
+                  <span className={pass ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700'}>
+                    {pass ? '✓' : '✗'}
+                  </span>
+                )}
+              </div>
+              <input
+                disabled={disabled}
+                value={values[slot.id] ?? ''}
+                onChange={(e) => setValue(slot.id, e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="write the line of code…"
+                className={`w-full rounded-lg border bg-white px-3 py-2 font-mono text-[13px] text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${
+                  pass === null
+                    ? 'border-navy-600'
+                    : pass
+                      ? 'border-emerald-400/60 bg-emerald-400/5'
+                      : 'border-rose-400/60 bg-rose-400/5'
+                }`}
+              />
+              {graded && pass === false && (
+                <p className="mt-1 font-mono text-[12px] text-emerald-700">→ {normCode(slot.accept[0])}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[11px] leading-relaxed text-slate-500">
+        ⚠ How this is checked: your lines are validated structurally (normalized text matching against
+        accepted answers) — they are <strong>not executed</strong>. Multiple correct styles can exist; the
+        reference solution appears after checking.
+      </p>
+    </div>
+  );
 }
 
 type BodyProps = {
@@ -476,6 +743,14 @@ function Explanation({
                 Show the corrected code
               </button>
             )}
+          </div>
+        )}
+        {exercise.kind === 'codechallenge' && (
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-slate-500">
+              Reference solution
+            </div>
+            <CodeBlock code={exercise.solution} language={exercise.language} />
           </div>
         )}
       </div>

@@ -14,6 +14,19 @@ export type CategoryId =
   | 'arch'
   | 'isaac';
 
+// Difficulty tiers. Existing lessons carry no difficulty field and are treated
+// as Foundation — the schema stays backward compatible with saved progress.
+export type Difficulty = 'foundation' | 'application' | 'troubleshooting' | 'mission';
+
+export const DIFFICULTY_ORDER: Difficulty[] = ['foundation', 'application', 'troubleshooting', 'mission'];
+
+export const DIFFICULTY_LABEL: Record<Difficulty, string> = {
+  foundation: 'Foundation',
+  application: 'Application',
+  troubleshooting: 'Troubleshooting',
+  mission: 'Engineering Mission',
+};
+
 // ---------------------------------------------------------------------------
 // Exercises — interactive quiz types. All are answered by picking/ordering
 // tokens; no arbitrary user code is ever executed.
@@ -105,12 +118,85 @@ export interface BughuntExercise {
   hint?: string;
 }
 
+// --- Scenario: multi-step troubleshooting (decisions -> observations ->
+//     final diagnosis). Each stage is answered with immediate teaching
+//     feedback; the recorded pass/fail hinges on the final diagnosis. ------
+
+export interface ScenarioStage {
+  id: string;
+  /** Stage label, e.g. "Observation", "First decision". */
+  title: string;
+  /** What the engineer sees at this point (markdown-lite). */
+  situation: string;
+  question: string;
+  options: MCQOption[];
+  correctId: string;
+  optionNotes?: Record<string, string>;
+  /** What this observation/decision means — shown after answering. */
+  explanation: string;
+}
+
+export interface ScenarioExercise {
+  kind: 'scenario';
+  id: string;
+  /** Incident briefing shown up front. */
+  prompt: string;
+  /** Context block (log excerpt, stage tree, topic list…). */
+  context?: string;
+  contextLabel?: string;
+  stages: ScenarioStage[];
+  /** Final root-cause pick — the recorded answer for grading/mistakes. */
+  diagnosis: {
+    question: string;
+    options: MCQOption[];
+    correctId: string;
+    optionNotes?: Record<string, string>;
+    explanation: string;
+  };
+  /** Engineering recap after the diagnosis. */
+  wrapUp: string;
+  hint?: string;
+}
+
+// --- Structured coding challenge: the learner writes real code lines into
+//     labeled slots. Answers are validated by normalized pattern matching —
+//     NO code is executed; the UI says so explicitly. -----------------------
+
+export interface CodeSlot {
+  id: string;
+  /** What this slot is for, e.g. "guard against an empty list". */
+  label: string;
+  /** Accepted full-line answers after normalization (whitespace-collapsed). */
+  accept: string[];
+  /** Alternative looser check: any-of substrings that must appear. */
+  requireAny?: string[];
+  /** Substrings that must not appear in the slot. */
+  forbid?: string[];
+  hint?: string;
+}
+
+export interface CodeChallengeExercise {
+  kind: 'codechallenge';
+  id: string;
+  prompt: string;
+  /** Starting code shown above the slots (the thing being modified). */
+  code: string;
+  language: string;
+  slots: CodeSlot[];
+  /** Reference solution shown after checking. */
+  solution: string;
+  explanation: string;
+  hint?: string;
+}
+
 export type Exercise =
   | MCQExercise
   | PredictExercise
   | FillBlankExercise
   | OrderExercise
-  | BughuntExercise;
+  | BughuntExercise
+  | ScenarioExercise
+  | CodeChallengeExercise;
 
 // ---------------------------------------------------------------------------
 // Lessons & categories
@@ -131,6 +217,30 @@ export interface Lesson {
   steps: LessonStep[];
   /** For Isaac Sim content: honesty note about docs versions / simulation. */
   versionNote?: string;
+  /** Difficulty tier. Omitted = Foundation (all pre-existing lessons). */
+  difficulty?: Difficulty;
+}
+
+// --- Diagnostic assessment ---------------------------------------------------
+
+export interface DiagnosticQuestion {
+  id: string;
+  categoryId: CategoryId;
+  prompt: string;
+  options: MCQOption[];
+  correctId: string;
+  optionNotes?: Record<string, string>;
+  explanation: string;
+  /** The tier this question screens for. */
+  tier: Exclude<Difficulty, 'mission'>;
+}
+
+/** Per-subject placement: recommended starting tier (mission only via progress). */
+export interface AssessmentResult {
+  level: Difficulty;
+  day: string;
+  /** false when the learner overrode the recommendation manually. */
+  auto: boolean;
 }
 
 export interface Flashcard {
@@ -204,4 +314,8 @@ export interface ProgressState {
   totalCorrect: number;
   /** daily mission per day, keyed yyyy-mm-dd — persisted so a half-done session resumes */
   dailyLog: Record<string, { cardIds: string[]; lessonId: string; quizIds: string[]; done: boolean }>;
+  /** v2: per-subject placement results (diagnostic + manual overrides). */
+  assessment?: Partial<Record<CategoryId, AssessmentResult>>;
+  /** v2: 'auto' follows the learning path; a CategoryId focuses daily missions. */
+  focusCategory?: CategoryId | 'auto';
 }

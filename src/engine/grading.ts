@@ -1,11 +1,18 @@
-import type { Exercise, FillBlankExercise } from './types';
+import type { CodeChallengeExercise, Exercise, FillBlankExercise, ScenarioExercise } from './types';
 
 export type QuizResponse =
   | { kind: 'mcq'; optionId: string }
   | { kind: 'predict'; choiceIndex: number }
   | { kind: 'fillblank'; values: Record<string, string> }
   | { kind: 'order'; itemIds: string[] }
-  | { kind: 'bughunt'; line: number; causeId: string };
+  | { kind: 'bughunt'; line: number; causeId: string }
+  | { kind: 'scenario'; diagnosisId: string; stageWrong: number }
+  | { kind: 'codechallenge'; values: Record<string, string> };
+
+/** Collapse whitespace and trim — the normalization used for typed code. */
+export function normCode(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
 
 export interface Grade {
   correct: boolean;
@@ -82,6 +89,39 @@ export function gradeExercise(ex: Exercise, r: QuizResponse): Grade {
         correct: rr.line === ee.buggyLine && rr.causeId === ee.causeCorrectId,
         yourAnswer: `Line ${rr.line}: ${cause?.text ?? '—'}`,
         correctAnswer: `Line ${ee.buggyLine}: ${correctCause?.text ?? '—'}`,
+      };
+    }
+    case 'scenario': {
+      const rr = r as Extract<QuizResponse, { kind: 'scenario' }>;
+      const ee = ex as ScenarioExercise;
+      const chosen = ee.diagnosis.options.find((o) => o.id === rr.diagnosisId);
+      const correctOpt = ee.diagnosis.options.find((o) => o.id === ee.diagnosis.correctId);
+      return {
+        correct: rr.diagnosisId === ee.diagnosis.correctId,
+        yourAnswer: chosen?.text ?? '—',
+        correctAnswer: correctOpt?.text ?? '—',
+        note:
+          rr.diagnosisId !== ee.diagnosis.correctId ? ee.diagnosis.optionNotes?.[rr.diagnosisId] : undefined,
+      };
+    }
+    case 'codechallenge': {
+      const rr = r as Extract<QuizResponse, { kind: 'codechallenge' }>;
+      const ee = ex as CodeChallengeExercise;
+      const slotOk = (slot: (typeof ee.slots)[number]): boolean => {
+        const v = normCode(rr.values[slot.id] ?? '');
+        if (!v) return false;
+        if (slot.accept.some((a) => normCode(a).toLowerCase() === v.toLowerCase())) return true;
+        if (slot.requireAny) {
+          const has = slot.requireAny.some((sub) => v.toLowerCase().includes(sub.toLowerCase()));
+          const bad = (slot.forbid ?? []).some((sub) => v.toLowerCase().includes(sub.toLowerCase()));
+          if (has && !bad) return true;
+        }
+        return false;
+      };
+      return {
+        correct: ee.slots.length > 0 && ee.slots.every(slotOk),
+        yourAnswer: ee.slots.map((s) => normCode(rr.values[s.id] || '(empty)')).join('  ·  '),
+        correctAnswer: ee.slots.map((s) => normCode(s.accept[0])).join('  ·  '),
       };
     }
   }

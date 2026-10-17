@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { ALL_CARDS, ALL_LESSONS, CATEGORIES } from '../data';
 import { levelFor, useProgress } from '../engine/progress';
 import { isDue, todayStr } from '../engine/srs';
+import { DIFFICULTY_LABEL } from '../engine/types';
+import type { CategoryId, Difficulty } from '../engine/types';
 import { ACCENT, Btn, Card, Chip, Markdown, ProgressBar, SectionTitle } from './ui';
 import { ByteSays } from './Byte';
 
-export function Stats() {
+export function Stats({ onAssess }: { onAssess: (id: string) => void }) {
   const { state, actions } = useProgress();
   const [confirmReset, setConfirmReset] = useState(false);
   const lvl = levelFor(state.xp);
@@ -136,6 +138,69 @@ export function Stats() {
           can re-import later.
         </p>
       </Card>
+
+      <div>
+        <SectionTitle
+          right={
+            <button
+              onClick={() => onAssess('python')}
+              className="text-xs text-cyan-700 underline-offset-2 hover:text-cyan-800 hover:underline"
+            >
+              Take the placement check →
+            </button>
+          }
+        >
+          Starting levels
+        </SectionTitle>
+        <Card className="mb-2.5">
+          <p className="text-xs leading-relaxed text-slate-500">
+            Your per-subject starting level steers the daily missions: lessons below it are not pushed as
+            "next up" (they stay available on each category page). Take the placement check or override
+            manually — you know your head better than a quiz does.
+          </p>
+        </Card>
+        <div className="space-y-2.5">
+          {CATEGORIES.map((c) => {
+            const a = ACCENT[c.accent];
+            const result = state.assessment?.[c.id];
+            return (
+              <Card key={c.id} className="p-3.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>{c.icon}</span>
+                  <span className="min-w-0 flex-1 text-sm font-medium text-slate-200">{c.name}</span>
+                  {result ? (
+                    <Chip className={`border ${a.border} ${a.chip} ${a.text}`}>
+                      {DIFFICULTY_LABEL[result.level]}
+                      {result.auto ? '' : ' (manual)'}
+                    </Chip>
+                  ) : (
+                    <Chip className="border border-navy-600 bg-navy-800/70 text-slate-400">not assessed</Chip>
+                  )}
+                  <button
+                    onClick={() => onAssess(c.id)}
+                    className="text-xs text-cyan-700 underline-offset-2 hover:text-cyan-800 hover:underline"
+                  >
+                    check
+                  </button>
+                  <select
+                    value={result?.auto === false ? result.level : ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v) actions.setAssessment(c.id as CategoryId, v as Difficulty, false);
+                    }}
+                    className="rounded-lg border border-navy-600 bg-navy-800 px-2 py-1 text-xs text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
+                  >
+                    <option value="">override…</option>
+                    <option value="foundation">Foundation</option>
+                    <option value="application">Application</option>
+                    <option value="troubleshooting">Troubleshooting</option>
+                  </select>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
 
       <div>
         <SectionTitle>Category mastery</SectionTitle>

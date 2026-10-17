@@ -9,10 +9,12 @@ export function Dashboard({
   onDaily,
   onCategory,
   onFlashcards,
+  onAssess,
 }: {
   onDaily: () => void;
   onCategory: (id: string) => void;
   onFlashcards: () => void;
+  onAssess: (id: string) => void;
 }) {
   const { state } = useProgress();
   const lvl = levelFor(state.xp);
@@ -63,6 +65,26 @@ export function Dashboard({
           </div>
         </div>
       </Card>
+
+      {/* Placement check nudge — only while subjects are unassessed */}
+      {CATEGORIES.some((c) => !state.assessment?.[c.id]) && (
+        <Card className="border-teal-400/25">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-teal-700">Placement check</div>
+              <h2 className="mt-1 text-sm font-semibold text-slate-200">
+                Three questions per subject calibrate where daily missions start
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Skips the basics you clearly still own · manual overrides in Stats
+              </p>
+            </div>
+            <Btn variant="ghost" onClick={() => onAssess('isaac')} className="shrink-0">
+              Calibrate levels →
+            </Btn>
+          </div>
+        </Card>
+      )}
 
       {/* Daily mission CTA */}
       <Card className={`border-cyan-400/25 ${session?.done ? '' : 'shadow-glow'}`}>

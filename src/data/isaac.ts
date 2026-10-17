@@ -1198,6 +1198,444 @@ export const isaacCategory: Category = {
       versionNote:
         'Concepts are stable across recent Isaac Sim releases, but always verify specific APIs and UI paths against the official NVIDIA Isaac Sim documentation for your installed version.',
     },
+    {
+      id: 'isx-a1-usd-hierarchy',
+      title: 'Engineering Mission: The Detached Gripper',
+      minutes: 12,
+      xp: 90,
+      difficulty: 'application',
+      narrative:
+        'After last night\'s scene refactor, the assembly cell looks perfect in the viewport — until someone presses play and the gripper stays behind while the arm moves. The shift supervisor wants root cause, not a workaround. This is a USD hierarchy investigation.',
+      steps: [
+        {
+          kind: 'teach',
+          heading: 'Why parenting is everything in USD',
+          body:
+            'A prim\'s world pose is derived, not stored: it is the composition of its own local transform with every ancestor\'s transform up the stage tree. A gripper parented under the wrist flange (`/World/UR10e/tool0`) inherits every wrist motion for free. The same prim parented under `/World` inherits only the world\'s identity — it sits exactly where its local transform says, motionless while the arm moves.\n\nSo "the gripper stopped following the arm" is almost never an animation bug. It is a **hierarchy fact**: something changed the gripper\'s parent. Refactors are the usual suspect — renaming, moving prims between scopes, or re-importing an asset that silently lands at a different path.',
+          keyPoints: [
+            'World pose = local transform composed with all ancestor transforms',
+            'Parented under the flange → follows the arm; parented under /World → does not',
+            '"Stopped following" → suspect the parent chain first',
+          ],
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'mcq',
+            id: 'isx-a1-q-reparent',
+            prompt:
+              'You reparent the gripper prim from /World to /World/UR10e/tool0 in the stage tree. The gripper now follows the arm — but it sits 40 cm off the flange, floating in air. Why?',
+            options: [
+              { id: 'a', text: 'The gripper\'s old local transform came along: it was tuned for its previous parent, so under the flange it composes to a wrong offset' },
+              { id: 'b', text: 'The gripper mesh has the wrong UV mapping, shifting its visual center' },
+              { id: 'c', text: 'The arm\'s kinematics changed — the flange itself is 40 cm off' },
+              { id: 'd', text: 'Gravity pulled it during the frame it was reparented' },
+            ],
+            correctId: 'a',
+            optionNotes: {
+              b: 'UV mapping affects textures, never geometry placement.',
+              c: 'The arm was reaching targets correctly before the refactor; and the offset would have shown in the old scene too.',
+              d: 'Before physics steps, transforms are purely hierarchical — nothing fell anywhere yet.',
+            },
+            explanation:
+              'Reparenting preserves the prim\'s LOCAL attributes (translate/rotate/scale). Those numbers meant "offset from /World" — under the flange they mean "offset from tool0", which composes to a different world pose. The fix: zero out or re-tune the local transform relative to the new parent (flange frames usually expect the gripper at a known tool offset, not 40 cm).',
+            hint: 'What did the local translate values measure under the OLD parent — and what do they measure under the new one?',
+          },
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'scenario',
+            id: 'isx-a1-scenario',
+            prompt:
+              '**Incident briefing — Cell B, morning shift.**\n\nThe dual-arm cell was refactored last night: prims renamed, unused assets removed. This morning the left arm runs its program, but the gripper stays at the pose it had when the scene loaded while the wrist moves away. No errors were printed. Walk the investigation and commit to the root cause.',
+            context:
+              '/World\n├── GroundPlane\n├── UR10e_left            (articulation root)\n│   ├── base_link\n│   ├── shoulder_link\n│   ├── forearm_link\n│   └── tool0                 ← flange the gripper used to live under\n└── gripper_assembly      ← present, pose frozen at scene load',
+              contextLabel: 'stage tree (now)',
+            stages: [
+              {
+                id: 's1',
+                title: 'Observation',
+                situation:
+                  'The gripper renders at a fixed world pose all run. The arm\'s joints report sane positions, and the wrist tool0 frame moves exactly along the programmed path.',
+                question: 'Given the wrist moves correctly and the gripper does not, what does this observation already rule in?',
+                options: [
+                  { id: 'a', text: 'The arm\'s articulation is healthy — the fault is in how the gripper is attached to it' },
+                  { id: 'b', text: 'The arm\'s joint drives are misconfigured' },
+                  { id: 'c', text: 'The gripper\'s meshes failed to load' },
+                  { id: 'd', text: 'The scene is running at the wrong time scale' },
+                ],
+                correctId: 'a',
+                optionNotes: {
+                  b: 'The wrist tracks its path — drive misconfiguration would show as wrong arm motion, not a detached gripper.',
+                  c: 'The gripper renders — meshes loaded.',
+                  d: 'Time scale changes speeds, not attachment.',
+                },
+                explanation:
+                  'One moving, one frozen, zero errors: the arm subtree is fine, so the fault lives at the junction between gripper and arm. In USD, that junction is the parent chain — the strongest hypothesis is that the gripper is no longer a descendant of the wrist.',
+              },
+              {
+                id: 's2',
+                title: 'Decision — what to inspect first',
+                situation:
+                  'You open the stage tree. You have thirty seconds before the supervisor asks for an update.',
+                question: 'Which check confirms or kills the hierarchy hypothesis fastest?',
+                options: [
+                  { id: 'a', text: 'Search the stage tree for the gripper prim and read its full path' },
+                  { id: 'b', text: 'Re-import the gripper asset from the original file' },
+                  { id: 'c', text: 'Profile the render framerate' },
+                  { id: 'd', text: 'Print every joint state of the arm again' },
+                ],
+                correctId: 'a',
+                optionNotes: {
+                  b: 'Re-importing changes the scene before the cause is known — if the refactor duplicated prims, you may now have two grippers and two problems.',
+                  c: 'Framerate cannot freeze one prim while animating its neighbors.',
+                  d: 'Already established: the arm is healthy. Re-collecting known facts is not diagnosis.',
+                },
+                explanation:
+                  'The path IS the diagnosis for hierarchy faults: `/World/gripper_assembly` means "child of the world — inherits nothing from the arm", while `/World/UR10e_left/tool0/gripper_assembly` means "rides on the flange". One look, definitive.',
+              },
+              {
+                id: 's3',
+                title: 'Observation — the tree confirms it',
+                situation:
+                  'The stage tree shows `gripper_assembly` under `/World` — not under `/World/UR10e_left/tool0`. An engineer suggests the quick fix: "leave it there, add a script that copies the wrist pose to the gripper every frame."',
+                question: 'What is wrong with the script workaround?',
+                options: [
+                  { id: 'a', text: 'Nothing — copying poses per frame is how USD handles attachment' },
+                  { id: 'b', text: 'It re-implements transform inheritance badly: it runs after simulation ordering can lag a frame, breaks the moment anyone edits the scene, and hides the real defect' },
+                  { id: 'c', text: 'Scripts are not supported while a simulation is stepping' },
+                  { id: 'd', text: 'It would work but violates the naming convention' },
+                ],
+                correctId: 'b',
+                optionNotes: {
+                  a: 'USD handles attachment through hierarchy natively — a pose-copying script is a second, worse implementation of the same feature.',
+                  c: 'Scripts absolutely run alongside stepping — that is how automation is built. The problem is the approach, not permission.',
+                  d: 'Naming conventions are the smallest issue in the room.',
+                },
+                explanation:
+                  'Pose-copy workarounds are how hierarchies rot: they lag a frame under some execution orders, silently break when paths change again, and every new engineer pays the complexity tax. The hierarchy expresses "attached" in one line of structure; use it.',
+              },
+            ],
+            diagnosis: {
+              question: 'Root cause — what do you report?',
+              options: [
+                { id: 'a', text: 'The refactor reparented gripper_assembly from /World/UR10e_left/tool0 to /World. Outside the arm\'s transform chain, it cannot inherit wrist motion; the fix is reparenting under tool0 and zeroing its stale local offset.' },
+                { id: 'b', text: 'The arm\'s articulation root was duplicated and the controller is driving the wrong one.' },
+                { id: 'c', text: 'The gripper asset\'s physics colliders were removed, so the simulator detached it.' },
+                { id: 'd', text: 'A render-deinitialization bug freezes any prim that is not a joint child.' },
+              ],
+              correctId: 'a',
+              optionNotes: {
+                b: 'The arm moves correctly along its path — a duplicated root would show as dead or erratic arm motion, and the tree shows exactly one root.',
+                c: 'Colliders affect contact response, not whether a prim follows its parent. A collider-less gripper still inherits transforms.',
+                d: 'Described behavior is not a thing in USD — prims follow their parents unconditionally; this option is a plausible-sounding dead end.',
+              },
+              explanation:
+                'The evidence chain: wrist moves (arm healthy) → gripper frozen (junction fault) → tree shows gripper under /World (parent changed) → refactor last night (motive). Every alternative requires ignoring the stage tree.',
+            },
+            wrapUp:
+              '**The engineering lesson:** in USD, attachment is hierarchy. When something stops following its parent, the stage tree is both the diagnosis and the fix — reparent, resolve the stale local transform, and refuse per-frame pose-copy workarounds that re-implement the scene graph badly. Then make the refactor safe: a scene-structure regression test (assert the gripper\'s path is a child of tool0) would have caught this before the morning shift.',
+            hint: 'Start from what moves and what does not — the boundary between them is the fault line.',
+          },
+        },
+      ],
+      versionNote:
+        'Concepts are stable across recent Isaac Sim releases, but always verify specific APIs and UI paths against the official NVIDIA Isaac Sim documentation for your installed version.',
+    },
+    {
+      id: 'isx-a2-articulation-debug',
+      title: 'Engineering Mission: The Arm That Won\'t Move',
+      minutes: 14,
+      xp: 110,
+      difficulty: 'troubleshooting',
+      narrative:
+        'A merged scene loads clean, the console shows joint targets arriving, the step loop runs — and the UR5e stands perfectly still. Two engineers have already "fixed" it by restarting twice. The Dome wants a systematic isolation, not a third restart.',
+      steps: [
+        {
+          kind: 'teach',
+          heading: 'The actuation chain — and how to isolate it',
+          body:
+            'For an articulated robot to move, five things must all be true at once: a **physics scene stepping** reliably; an **articulation root** the runtime actually detected, with joints discovered beneath it; **drive gains** (stiffness/damping) on those joints, so a target produces force; **commands arriving** at the right articulation (targets set, not just printed); and a **numerically sane scene** (sensible units, no exploding solver). A failure anywhere breaks motion — and each failure looks identical from outside: the arm does not move.\n\nSo debugging is bisection against that chain, cheapest check first: Is the loop stepping? Did the runtime find the articulation and all joints? Are targets changing on the right object? Only then open the drive-gain question — because gains are the one link with no error message when wrong: zero stiffness is a valid number that silently produces zero force.',
+          keyPoints: [
+            'Five-link chain: stepping → articulation+joints → drives/gains → commands → numerics',
+            'Each failure presents identically from outside: no motion',
+            'Zero drive gains fail silently — the classic suspect once everything upstream checks out',
+          ],
+        },
+        {
+          kind: 'byte',
+          text: 'From the incident log, Cycle 88: "restarted, works." Cycle 91: "restarted, works." Cycle 94: "restarted." The Dome has promoted restarting to a monitoring strategy. We are so proud.',
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'order',
+            id: 'isx-a2-order',
+            prompt: 'Order the isolation checklist from cheapest/most-likely-first to deepest.',
+            items: [
+              { id: '1', text: 'Confirm the simulation loop is stepping (time advances, no pause)' },
+              { id: '2', text: 'Confirm the runtime discovered the articulation root and all expected joints' },
+              { id: '3', text: 'Confirm joint targets are actually being set on THAT articulation (not just printed)' },
+              { id: '4', text: 'Inspect the joint drives: stiffness/damping gains nonzero, targets within limits' },
+              { id: '5', text: 'Check scene numerics: units, scales, solver stability' },
+            ],
+            explanation:
+              'The order is by cost and information gain: stepping and articulation detection fail loudly and take seconds; commands take a breakpoint; gains take reading values; numerics is the deep end. Restarting "works" only when the actual fault was a stale load — it tells you nothing about which link broke, which is why the third restart was refused.',
+            hint: 'You want the check that is fastest AND most often the culprit before the one that requires reading physics values.',
+          },
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'scenario',
+            id: 'isx-a2-scenario',
+            prompt:
+              '**Incident briefing — UR5e palletizing cell, post-merge.**\n\nThe scene was merged from two branches last night. On play, the arm does not move. Two restarts changed nothing. The console log below is all you have. Run the isolation and name the root cause.',
+            context:
+              '[load] stage opened: ur5e_cell_merged.usda\n[load] physics scene: /World/PhysicsScene          OK\n[load] articulation root: /World/ur5e              OK\n[load] joints discovered: 6 / 6                    OK\n[run ] sim step loop: active, 60 Hz                OK\n[cmd ] new targets: [0.0, -1.2, 1.57, 0.0, 0.0, 0.0]\n[cmd ] new targets: [0.0, -1.2, 1.57, 0.2, 0.0, 0.0]\n[telemetry] joint positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]\n[telemetry] joint positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]',
+              contextLabel: 'console (abridged)',
+            stages: [
+              {
+                id: 's1',
+                title: 'Bisect the chain',
+                situation:
+                  'Read the log as a checklist: stepping OK, articulation root found, 6/6 joints discovered, targets arriving and changing, positions constant.',
+                question: 'Which links of the actuation chain does this log already clear?',
+                options: [
+                  { id: 'a', text: 'Stepping, articulation detection, and command delivery — the fault is downstream, in the drive layer or the physics response' },
+                  { id: 'b', text: 'Only the physics scene — the rest is unknown' },
+                  { id: 'c', text: 'Everything except stepping' },
+                  { id: 'd', text: 'Nothing — logs never rule out causes' },
+                ],
+                correctId: 'a',
+                optionNotes: {
+                  b: 'Three links are explicitly OK in the log; treating the scene as the only suspect ignores half the checklist.',
+                  c: 'Stepping is explicitly active — the one link you claim is open is the one the log closes.',
+                  d: 'The whole discipline of structured logs is that they DO rule things out. That is why the merge kept them.',
+                },
+                explanation:
+                  'The log is a bisection gift: it verifies the first three links and the fifth (no solver explosions — positions are stable, just zero). What it never shows is a force being produced. That isolates the drive layer.',
+              },
+              {
+                id: 's2',
+                title: 'Decision — the drive layer',
+                situation:
+                  'You inspect the joint drive properties on the merged prim. Each joint has a position target set — and stiffness 0, damping 0.',
+                question: 'Why do nonzero targets with zero gains produce a statue?',
+                options: [
+                  { id: 'a', text: 'Targets are only desired positions; drive gains are the spring/damper constants that turn "desired" into torque. Zero stiffness means the drive applies no force toward the target' },
+                  { id: 'b', text: 'Zero gains put the joint in velocity mode, which ignores position targets' },
+                  { id: 'c', text: 'The targets are only applied when gains are changed simultaneously' },
+                  { id: 'd', text: 'Zero damping makes the joint move infinitely fast to the target' },
+                ],
+                correctId: 'a',
+                optionNotes: {
+                  b: 'Velocity control still needs gains to apply force — zero effort at the drive means zero motion in any mode.',
+                  c: 'Targets and gains are independent inputs; the merge just happened to keep one and lose the other.',
+                  d: 'Infinite speed would still be motion — and would destabilize the solver, not freeze it.',
+                },
+                explanation:
+                  'A position-driven joint is a servo: target defines where you want to be; stiffness is the spring pulling toward it; damping tames the spring. Zero stiffness = no spring = targets are wishes. The merge kept target-setting code and lost the gain configuration — a classic merge-halves casualty.',
+              },
+              {
+                id: 's3',
+                title: 'Observation — after setting gains',
+                situation:
+                  'An engineer sets stiffness to a plausible value, leaves damping at 0, presses play. The arm now TWITCHES toward the target and oscillates wildly instead of settling.',
+                question: 'What does this new symptom tell you?',
+                options: [
+                  { id: 'a', text: 'The diagnosis was wrong — gains were never the issue' },
+                  { id: 'b', text: 'The diagnosis was right: force is now produced. Zero damping leaves the spring undamped, so the joint rings around the target — add damping and verify settling' },
+                  { id: 'c', text: 'The stiffness value is too small — set it to the maximum' },
+                  { id: 'd', text: 'The arm needs gravity compensation before any gain is valid' },
+                ],
+                correctId: 'b',
+                optionNotes: {
+                  a: 'The symptom CHANGE is proof: before gains, no force; after gains, force with underdamped ringing. That is diagnosis confirmed, then refined.',
+                  c: 'Maximum stiffness is not a tuning strategy — it is how you get violent, unstable motion and solver explosions.',
+                  d: 'Gravity compensation matters for tracking accuracy on real arms, but the ringing here is the undamped oscillator, plain to see.',
+                },
+                explanation:
+                  'Debugging is iterative: the new symptom is information, not failure. Stiffness without damping is an ideal undamped oscillator — it will oscillate forever. Practical servo tuning sets both, then verifies settling behavior against the task (cycle time, overshoot limits).',
+              },
+            ],
+            diagnosis: {
+              question: 'Root cause — what do you report to the shift lead?',
+              options: [
+                { id: 'a', text: 'The merge dropped the joint drive gain configuration (stiffness/damping zeroed): targets were set and delivered but produced no actuation force. Restoring gains — stiffness AND damping — and verifying settling is the fix. Restarting masked nothing and fixed nothing.' },
+                { id: 'b', text: 'The articulation root was not detected after the merge.' },
+                { id: 'c', text: 'The merged scene steps at the wrong rate for the controller.' },
+                { id: 'd', text: 'The joint targets were sent to a different articulation instance.' },
+              ],
+              correctId: 'a',
+              optionNotes: {
+                b: 'The log shows "articulation root: OK, joints 6/6" — directly contradicted.',
+                c: 'Step rate affects timing accuracy, not whether any force exists; and the log shows a clean 60 Hz loop.',
+                d: 'Targets arrive and the telemetry reads the same articulation — if they went elsewhere, neither would show.',
+              },
+              explanation:
+                'Every wrong option requires disbelieving the log. The right one explains all observations: silent no-motion at zero gains, then ringing at zero damping. One cause, two symptoms, fixed by restoring and tuning the drive configuration the merge lost.',
+            },
+            wrapUp:
+              '**The engineering lesson:** no-motion failures are bisection failures — walk the actuation chain and let each check eliminate half the suspects. Beware the silent-valid value: zero is a legal gain that means "no force". And treat symptom changes during debugging as data: the twitch was not a new bug, it was the diagnosis confirming itself with damping missing. Finally: restarting is not a fix, it is a coin flip you cannot learn from.',
+            hint: 'Let the log eliminate chain links before touching any property panel.',
+          },
+        },
+      ],
+      versionNote:
+        'Concepts are stable across recent Isaac Sim releases, but always verify specific APIs and UI paths against the official NVIDIA Isaac Sim documentation for your installed version.',
+    },
+    {
+      id: 'isx-a3-simreal-comms',
+      title: 'Engineering Mission: The Twin That Lags',
+      minutes: 16,
+      xp: 130,
+      difficulty: 'mission',
+      narrative:
+        'The digital twin dashboard for the assembly cell updates — but two seconds late. The planner does not care yet; the safety review next week will. This mission walks a sim-to-real communication investigation end to end: timestamps, publisher health, QoS pairing, and the consumer nobody suspected.',
+      steps: [
+        {
+          kind: 'teach',
+          heading: 'Staleness triage: late, slow, or never sent?',
+          body:
+            '"The twin is behind reality" is three distinct diseases wearing one symptom. **Data is old on arrival** (timestamps lag) → transport or producer delay. **Data arrives fresh but is displayed late** → consumer-side stall. **Data stops arriving** → QoS incompatibility, dead publisher, or network. The first diagnostic act is always to read **timestamps**: compare the message\'s stamp against the receiving clock — but know your clock domains first, because the bridge stamps with *simulation time* while real hardware stamps with wall time.\n\nThen check publisher health (is it emitting at its expected rate, error-free?), then the **QoS pairing**: reliability and durability settings must be compatible on both ends. A reliable publisher with a best-effort subscriber works; the reverse pairing (best-effort publisher, reliable subscriber) matches no messages at all — the subscriber sees a silent topic that is, in fact, in front of it.',
+          keyPoints: [
+            'Timestamp first: old-on-arrival (delay) vs fresh-but-late (consumer stall) vs absent (QoS/death)',
+            'Bridge stamps use sim time; hardware stamps use wall time — compare within a domain',
+            'QoS pairs: reliable pub ↔ best-effort sub works; best-effort pub ↔ reliable sub never delivers',
+          ],
+        },
+        {
+          kind: 'byte',
+          text: 'The safety reviewer\'s favorite question: "when the twin shows the arm at 40 degrees, where is it really?" The only wrong answer is "probably about 40 degrees." Staleness is a number. Measure it.',
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'mcq',
+            id: 'isx-a3-qos',
+            prompt:
+              'A ROS 2 publisher emits /joint_states with RELIABLE reliability; a new twin subscriber joins with BEST_EFFORT. A colleague switches them: publisher BEST_EFFORT, subscriber RELIABLE. What does each pairing deliver?',
+            options: [
+              { id: 'a', text: 'Both pairings work — reliability only matters on the publisher side' },
+              { id: 'b', text: 'Reliable pub + best-effort sub delivers (best effort accepts reliability); best-effort pub + reliable sub delivers nothing — the pairing is incompatible' },
+              { id: 'c', text: 'Reliable pub + best-effort sub delivers nothing; the reversed pairing works' },
+              { id: 'd', text: 'Neither pairing delivers — both sides must be identical' },
+            ],
+            correctId: 'b',
+            optionNotes: {
+              a: 'Reliability is negotiated between both endpoints — the asymmetric cases behave very differently, which is the whole trap.',
+              c: 'Backwards: a best-effort subscriber is happy to take whatever a reliable publisher sends; it is the reliable subscriber that refuses to compromise.',
+              d: 'Identical settings always work — the incompatibility lives specifically in demanding more reliability than is offered.',
+            },
+            explanation:
+              'The rule: the subscriber may ask for less than the publisher offers, never more. Reliable→best-effort flows (the sub just tolerates loss); best-effort→reliable is rejected at discovery — the subscriber requests guarantees the publisher does not make, so it receives silence while the publisher logs healthy sends. This is why "the topic looks fine on the publisher side" is not evidence the subscriber is receiving.',
+            hint: 'Which side is making the demand — the one offering or the one requiring?',
+          },
+        },
+        {
+          kind: 'exercise',
+          exercise: {
+            kind: 'scenario',
+            id: 'isx-a3-scenario',
+            prompt:
+              '**Incident briefing — digital twin, pre-safety-review.**\n\nThe twin dashboard mirrors the simulated assembly cell over the ROS 2 bridge. Operators report it runs "about two seconds behind" the 3D viewport of the same simulation. The safety review is in five days and requires staleness under 100 ms. Triage the lag and commit to the root cause.',
+            context:
+              '[twin dashboard]  joint_states: displayed pose lags viewport ~2 s\n[msg inspect]     /joint_states stamp: 2.0-2.1 s BEHIND the sim clock on arrival\n[bridge console]  publishing /joint_states @ 60 Hz, 0 errors, sim time source\n[transport]       loopback, 0% loss, queues not saturated\n[qos]            pub: RELIABLE, sub: RELIABLE           compatible\n[subscriber proc] twin app: single-threaded — network callbacks and 3D\n                  rendering share one loop; render frame takes ~35 ms,\n                  spikes to 2 s when the review-meeting view is open',
+              contextLabel: 'triage notes',
+            stages: [
+              {
+                id: 's1',
+                title: 'Observation — classify the staleness',
+                situation:
+                  'The stamps on arrival read 2.0–2.1 s behind the simulation clock.',
+                question:
+                  'Per the triage rule: is this data old-on-arrival, fresh-but-late, or absent?',
+                options: [
+                  { id: 'a', text: 'Old on arrival — something between bridge and dashboard delays delivery by ~2 s' },
+                  { id: 'b', text: 'Absent — the subscriber is not matching messages' },
+                  { id: 'c', text: 'Clock-domain confusion — sim time was compared to wall time by mistake' },
+                  { id: 'd', text: 'Fresh but displayed late — the numbers arrive on time and the app shows them late' },
+                ],
+                correctId: 'a',
+                optionNotes: {
+                  b: 'Messages demonstrably arrive — absence would show gaps and stale-but-constant display, not a smooth 2 s chase.',
+                  c: 'The comparison was made within one domain (against the sim clock the bridge itself uses) — that is the correct comparison.',
+                  d: 'That is the tempting one, but it is contradicted by the stamp: if display were the delay, arrival stamps would be current. They are not.',
+                },
+                explanation:
+                  'The stamp is measured at arrival against the same clock the publisher uses — so the data is genuinely 2 s old when the app receives it. The delay happened BEFORE the subscriber\'s processing: producer or transport. This single measurement just eliminated the entire consumer side for now.',
+              },
+              {
+                id: 's2',
+                title: 'Decision — producer or transport?',
+                situation:
+                  'Bridge console: 60 Hz, zero errors, publishing from sim time. Transport: loopback, zero loss, queues healthy. QoS: RELIABLE↔RELIABLE, compatible.',
+                question: 'Given the producer and transport look healthy but data arrives 2 s old, where must the delay physically live?',
+                options: [
+                  { id: 'a', text: 'In a queue between publisher and subscriber — messages are being created on time but released late, which points to buffering on the delivery path or at the receiving socket' },
+                  { id: 'b', text: 'Nowhere — 2 s staleness at 60 Hz is normal for a rendered twin' },
+                  { id: 'c', text: 'In the simulation physics — the world itself is lagging' },
+                  { id: 'd', text: 'In the bridge\'s stamping code — it must be writing wrong timestamps' },
+                ],
+                correctId: 'a',
+                optionNotes: {
+                  b: '2 s at 60 Hz means ~120 stale messages in flight — nothing about that is required or normal for a loopback link.',
+                  c: 'The sim clock advances on schedule (the viewport matches it), so physics is producing states on time.',
+                  d: 'If stamps were written wrong, the viewport and dashboard would disagree by the same amount — but the dashboard\'s delay matches real message age, and a stamping bug cannot hold back delivery by 2 s.',
+                },
+                explanation:
+                  'On-time production + healthy transport + old-on-arrival leaves exactly one place: messages queuing somewhere on the receive path. On loopback with no saturation, that queue is almost always at the receiving application — the socket buffer, filling because the app is not draining it fast enough.',
+              },
+              {
+                id: 's3',
+                title: 'Observation — the subscriber\'s dirty secret',
+                situation:
+                  'The twin app is single-threaded: ROS 2 message callbacks and 3D rendering share one loop. Normal frames take 35 ms (fine for 60 Hz), but when the review-meeting camera view opens, frames spike to 2 s — exactly when operators first noticed the lag.',
+                question: 'Assemble the mechanism. What is happening?',
+                options: [
+                  { id: 'a', text: 'The bridge throttles publishing whenever it detects a slow subscriber' },
+                  { id: 'b', text: 'Render spikes block the single-threaded loop, so callbacks do not run; fresh states queue in the socket buffer behind unprocessed ones, and the dashboard displays a message that is already seconds old' },
+                  { id: 'c', text: 'The queue discards old messages, so the displayed pose is actually current' },
+                  { id: 'd', text: 'The 3D view and the joint display read different topics' },
+                ],
+                correctId: 'b',
+                optionNotes: {
+                  a: 'The bridge logs 60 Hz with zero errors throughout — no throttling, and ROS 2 does not slow publishers to match slow subscribers.',
+                  c: 'The staleness measurement proves old messages ARE being displayed; with keep-last(1) queues the display would jump, not lag smoothly.',
+                  d: 'Both read /joint_states; and the lag tracks render spikes, not topic choice.',
+                },
+                explanation:
+                  'The full causal chain: render spike (2 s) → callbacks starve (single thread) → socket buffer fills with ~120 messages → each drained message is already seconds old → dashboard shows old states "smoothly". The viewport looks fine because it reads the simulation directly. One architectural decision — one thread — created a real-time failure invisible until someone measured.',
+              },
+            ],
+            diagnosis: {
+              question: 'Root cause and fix — what do you report for the safety review?',
+              options: [
+                { id: 'a', text: 'Bridge misconfiguration: it must switch from sim time to wall time and reduce rate to 10 Hz until the review passes.' },
+                { id: 'b', text: 'Consumer-side stall: the twin\'s single-threaded loop lets render spikes starve message callbacks, so states queue and display ~2 s stale. Fix: decouple network receive from rendering (separate thread/executor with its own queue, display latest state), then re-measure stamp-vs-display latency against the 100 ms requirement.' },
+                { id: 'c', text: 'QoS mismatch: switch the subscriber to best-effort and the lag disappears with the dropped messages.' },
+                { id: 'd', text: 'Simulate on a second machine: moving the bridge off this workstation removes the lag.' },
+              ],
+              correctId: 'b',
+              optionNotes: {
+                a: 'Wrong on mechanism (stamps were correct — the delay was real aging, not bad stamping) and wrong on fix: slower publishing shrinks the queue but the stall remains — and the safety review wants fresher data, not less.',
+                c: 'QoS was already compatible; best-effort on the subscriber would silently drop during exactly the render spikes that cause the lag — hiding the symptom and worsening the safety case.',
+                d: 'Moving the sim changes nothing: the stall is in the twin app\'s single thread, which travels with the app.',
+              },
+              explanation:
+                'The causal chain was built measurement-first: stamps classified the staleness as real delay; producer/transport/QoS checks eliminated themselves; the render-spike correlation exposed the single-threaded loop. The fix is architectural (decouple receive from render, keep latest), and the acceptance test is the same measurement that found the bug: stamp-vs-display latency under 100 ms — including while the review view is open.',
+            },
+            wrapUp:
+              '**The engineering lesson:** staleness is a measurement, not a vibe — timestamp first, and classify (old-on-arrival, fresh-but-late, absent) before touching anything. Producer health, transport, and QoS pairing eliminate themselves in that order. And the last suspect is always the consumer nobody measured: in real-time systems, a shared loop between networking and rendering is a standing latency bug that surfaces exactly when the demo matters. The same triage applies when the "publisher" is a real robot instead of a bridge — only the clock domain changes.',
+            hint: 'Timestamps split the world in three. Measure before you theorize.',
+          },
+        },
+      ],
+      versionNote:
+        'Concepts are stable across recent Isaac Sim releases, but always verify specific APIs and UI paths against the official NVIDIA Isaac Sim documentation for your installed version.',
+    },
   ],
   flashcards: [
     {
@@ -1344,6 +1782,39 @@ export const isaacCategory: Category = {
         'Simulations are not byte-deterministic across contact-heavy scenes — that is why tolerances exist, and why re-baselining must stay a deliberate, reviewed decision rather than chasing drifting numbers.',
       application:
         'The safety net that lets a lab touch scenes constantly: nightly scripted runs catch broken physics by morning instead of mid-experiment.',
+      difficulty: 3,
+    },
+    {
+      id: 'fc-isx-12',
+      categoryId: 'isaac',
+      concept: 'Transform inheritance & reparenting',
+      explanation:
+        'A prim\'s world pose composes its local transform with every ancestor\'s. Reparenting keeps the local values but changes what they are measured against — so a moved prim lands in a new world pose until its local transform is re-tuned.',
+      example: 'A gripper under /World freezes when the arm moves; reparented under /World/ur10e/tool0 it rides the flange — 40 cm off until the stale local offset is zeroed.',
+      misconception: 'Pose-copy scripts that chase a detached prim re-implement the scene graph badly — hierarchy is the attachment mechanism.',
+      application: '"It stopped following the arm" is a hierarchy fault: read the stage tree path first, work around last.',
+      difficulty: 3,
+    },
+    {
+      id: 'fc-isx-13',
+      categoryId: 'isaac',
+      concept: 'Joint drive gains: targets need springs',
+      explanation:
+        'A position target only states a desire; the drive\'s stiffness (spring toward target) and damping (motion-tamer) convert it into force. Zero gains are a silent no-op — a legal value that produces a statue.',
+      example: 'Targets arriving, loop stepping, arm frozen → read stiffness/damping before blaming the controller. Twitching after enabling stiffness means damping is missing.',
+      misconception: 'Zero gains do not mean "free motion" or "direct position setting" — they mean zero actuation force toward the target.',
+      application: 'The silent link in every articulation-no-motion bisection, and the classic casualty of scene merges that keep target code but lose gain config.',
+      difficulty: 3,
+    },
+    {
+      id: 'fc-isx-14',
+      categoryId: 'isaac',
+      concept: 'Staleness triage (sim-to-real comms)',
+      explanation:
+        'Classify lag with timestamps before touching anything: old-on-arrival = producer/transport delay; fresh-but-displayed-late = consumer stall; absent = QoS incompatibility or dead publisher. The bridge stamps with sim time — compare within clock domains.',
+      example: 'Stamps 2 s behind sim clock on arrival + healthy 60 Hz publisher + compatible QoS = the receiving app is not draining its queue.',
+      misconception: 'QoS is symmetric only when settings match: reliable pub → best-effort sub delivers; best-effort pub → reliable sub delivers nothing.',
+      application: 'The triage list for twin dashboards and sim-to-real links alike — only the clock domain changes when the bridge is replaced by a real robot.',
       difficulty: 3,
     },
   ],

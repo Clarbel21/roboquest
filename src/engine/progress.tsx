@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Exercise, ProgressState, Rating } from './types';
+import type { CategoryId, Difficulty, Exercise, ProgressState, Rating } from './types';
 import { newCard, schedule, todayStr } from './srs';
 import { LESSON_BY_ID } from '../data';
 
@@ -12,7 +12,7 @@ const STORAGE_KEY = 'roboquest-lite-v1';
 
 function defaultState(): ProgressState {
   return {
-    version: 1,
+    version: 2,
     xp: 0,
     streak: { current: 0, best: 0, lastActiveDay: null, days: [] },
     completedLessons: {},
@@ -22,6 +22,8 @@ function defaultState(): ProgressState {
     totalAnswered: 0,
     totalCorrect: 0,
     dailyLog: {},
+    assessment: {},
+    focusCategory: 'auto',
   };
 }
 
@@ -30,8 +32,17 @@ function loadState(): ProgressState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
     const parsed = JSON.parse(raw) as Partial<ProgressState>;
-    if (parsed.version !== 1) return defaultState();
-    return { ...defaultState(), ...parsed };
+    // v1 -> v2 migration: everything saved under v1 (XP, streak, lessons,
+    // SRS cards, mistakes, daily log) is preserved as-is; the new fields
+    // (assessment, focusCategory) are defaulted on first load.
+    if (parsed.version !== 1 && parsed.version !== 2) return defaultState();
+    return {
+      ...defaultState(),
+      ...parsed,
+      version: 2,
+      assessment: parsed.assessment ?? {},
+      focusCategory: parsed.focusCategory ?? 'auto',
+    };
   } catch {
     return defaultState();
   }
@@ -80,6 +91,9 @@ export interface ProgressActions {
   rateCard: (cardId: string, rating: Rating) => void;
   completeLesson: (lessonId: string, scorePct: number) => { xpEarned: number };
   markDailyDone: () => void;
+  /** Record a placement result (from the diagnostic or a manual override). */
+  setAssessment: (categoryId: CategoryId, level: Difficulty, auto: boolean) => void;
+  setFocusCategory: (category: CategoryId | 'auto') => void;
   /** Persist today's composed session so a reload resumes it exactly. */
   ensureDaily: (session: { cardIds: string[]; lessonId: string; quizIds: string[] }) => void;
   resetProgress: () => void;
@@ -189,6 +203,17 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         });
       },
 
+      setAssessment: (categoryId, level, auto) => {
+        setState((s0) => ({
+          ...s0,
+          assessment: { ...s0.assessment, [categoryId]: { level, day: todayStr(), auto } },
+        }));
+      },
+
+      setFocusCategory: (category) => {
+        setState((s0) => ({ ...s0, focusCategory: category }));
+      },
+
       ensureDaily: (session) => {
         setState((s0) => {
           const day = todayStr();
@@ -222,8 +247,9 @@ function exercisePrompt(exercise: Exercise): string {
     case 'predict':
     case 'fillblank':
     case 'order':
-      return exercise.prompt;
     case 'bughunt':
+    case 'scenario':
+    case 'codechallenge':
       return exercise.prompt;
   }
 }

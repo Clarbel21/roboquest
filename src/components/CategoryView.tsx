@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { CATEGORY_BY_ID, LESSON_BY_ID } from '../data';
 import { useProgress } from '../engine/progress';
+import { DIFFICULTY_LABEL } from '../engine/types';
+import type { CategoryId } from '../engine/types';
 import { ACCENT, Btn, Card, Chip, ProgressBar } from './ui';
 import { LessonRunner } from './LessonRunner';
 
@@ -10,6 +12,7 @@ export function CategoryView({ categoryId, onHome, onStudyCards }: { categoryId:
   if (!category) return null;
   const a = ACCENT[category.accent];
   const done = category.lessons.filter((l) => state.completedLessons[l.id] !== undefined).length;
+  const assessment = state.assessment?.[categoryId as CategoryId];
 
   return (
     <div className="mx-auto max-w-3xl animate-slide-up">
@@ -31,6 +34,12 @@ export function CategoryView({ categoryId, onHome, onStudyCards }: { categoryId:
               <Chip className={`border ${a.border} ${a.chip} ${a.text}`}>
                 {done}/{category.lessons.length} lessons restored
               </Chip>
+              {assessment && (
+                <Chip className="border border-cyan-400/40 bg-cyan-400/10 text-cyan-800">
+                  Start at: {DIFFICULTY_LABEL[assessment.level]}
+                  {assessment.auto ? '' : ' (manual)'}
+                </Chip>
+              )}
               <button
                 onClick={onStudyCards}
                 className={`text-xs ${a.text} underline-offset-2 hover:underline`}
@@ -66,6 +75,7 @@ export function CategoryView({ categoryId, onHome, onStudyCards }: { categoryId:
                 locked={lockedByOrder}
                 versionNote={lesson.versionNote}
                 isNext={lesson.id === nextId}
+                tier={lesson.difficulty ?? 'foundation'}
               />
             );
           });
@@ -86,6 +96,7 @@ function LessonRow({
   locked,
   versionNote,
   isNext = false,
+  tier,
 }: {
   index: number;
   lessonId: string;
@@ -97,6 +108,7 @@ function LessonRow({
   locked: boolean;
   versionNote?: string;
   isNext?: boolean;
+  tier: 'foundation' | 'application' | 'troubleshooting' | 'mission';
 }) {
   const [open, setOpen] = useState(false);
   const a = ACCENT[accent];
@@ -129,9 +141,22 @@ function LessonRow({
               <Chip className="shrink-0 border border-cyan-400/40 bg-cyan-400/10 text-cyan-700">Next up</Chip>
             )}
           </div>
-          <div className="mt-0.5 flex gap-3 text-xs text-slate-500">
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
             <span>~{minutes} min</span>
             <span>+{xp} XP</span>
+            <Chip
+              className={`border ${
+                tier === 'mission'
+                  ? 'border-violet-400/40 bg-violet-400/10 text-violet-700'
+                  : tier === 'troubleshooting'
+                    ? 'border-rose-400/40 bg-rose-400/10 text-rose-700'
+                    : tier === 'application'
+                      ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-800'
+                      : 'border-navy-600 bg-navy-800/60 text-slate-400'
+              }`}
+            >
+              {DIFFICULTY_LABEL[tier]}
+            </Chip>
             {score !== undefined && <span className="text-emerald-700">best {score}%</span>}
           </div>
         </div>
